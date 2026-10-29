@@ -6,7 +6,7 @@ import SwiftData
 
 struct RecordKickIntent: AppIntent {
     static var title: LocalizedStringResource = "记一次胎动"
-    static var description: IntentDescription = IntentDescription("立刻记录一次胎动，不需要打开应用。")
+    static var description: IntentDescription? = IntentDescription("立刻记录一次胎动，不需要打开应用。")
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -28,7 +28,7 @@ struct RecordKickIntent: AppIntent {
 
 struct StartKickCountIntent: AppIntent {
     static var title: LocalizedStringResource = "开始数胎动"
-    static var description: IntentDescription = IntentDescription("开始一轮新的胎动计数。")
+    static var description: IntentDescription? = IntentDescription("开始一轮新的胎动计数。")
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -50,7 +50,7 @@ enum ContractionStep: Sendable {
 
 struct ToggleContractionIntent: AppIntent {
     static var title: LocalizedStringResource = "宫缩开始或结束"
-    static var description: IntentDescription = IntentDescription("没有在计时就开始，正在计时就结束。")
+    static var description: IntentDescription? = IntentDescription("没有在计时就开始，正在计时就结束。")
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -84,7 +84,7 @@ struct ToggleContractionIntent: AppIntent {
 
 struct StartContractionIntent: AppIntent {
     static var title: LocalizedStringResource = "开始宫缩计时"
-    static var description: IntentDescription = IntentDescription("开始记录一次宫缩的起始时间。")
+    static var description: IntentDescription? = IntentDescription("开始记录一次宫缩的起始时间。")
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -100,7 +100,7 @@ struct StartContractionIntent: AppIntent {
 
 struct EndContractionIntent: AppIntent {
     static var title: LocalizedStringResource = "结束宫缩计时"
-    static var description: IntentDescription = IntentDescription("结束当前这次宫缩并保存。")
+    static var description: IntentDescription? = IntentDescription("结束当前这次宫缩并保存。")
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -127,7 +127,7 @@ struct EndContractionIntent: AppIntent {
 
 struct OpenSummaryIntent: AppIntent {
     static var title: LocalizedStringResource = "打开就诊摘要"
-    static var description: IntentDescription = IntentDescription("打开可以直接念给医生的记录摘要。")
+    static var description: IntentDescription? = IntentDescription("打开可以直接念给医生的记录摘要。")
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult {
@@ -138,8 +138,6 @@ struct OpenSummaryIntent: AppIntent {
 // MARK: - 注册到系统（Siri / 快捷指令 / 聚焦搜索）
 
 struct JiQianShortcuts: AppShortcutsProvider {
-    static var shortcutTileColor: ShortcutTileColor = .teal
-
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: RecordKickIntent(),
