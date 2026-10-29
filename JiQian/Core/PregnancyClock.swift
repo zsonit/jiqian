@@ -52,6 +52,14 @@ enum Fmt {
         return f.string(from: date)
     }
 
+    /// 2026年10月30日
+    static func longDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyy年M月d日"
+        return f.string(from: date)
+    }
+
     /// 00:35 / 12:04
     static func clock(_ interval: TimeInterval) -> String {
         let total = max(0, Int(interval))
