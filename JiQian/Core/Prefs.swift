@@ -8,6 +8,7 @@ enum PrefKey {
     static let provider = "providerName"
     static let phone = "providerPhone"
     static let risks = "highRiskTags"
+    static let sound = "tapSoundEnabled"
 }
 
 /// 设置项统一走 UserDefaults，视图侧用 @AppStorage 双向绑定，
@@ -45,6 +46,12 @@ enum Prefs {
         let raw = UserDefaults.standard.string(forKey: PrefKey.risks) ?? ""
         guard !raw.isEmpty else { return [] }
         return raw.split(separator: ",").map(String.init)
+    }
+
+    static var soundOn: Bool {
+        let d = UserDefaults.standard
+        if d.object(forKey: PrefKey.sound) == nil { return true } // 默认开
+        return d.bool(forKey: PrefKey.sound)
     }
 
     static let allRisks = [
