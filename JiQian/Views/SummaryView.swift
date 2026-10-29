@@ -6,8 +6,6 @@ struct SummaryView: View {
     @State private var range: SummaryRange = .day
     @State private var text: String = ""
     @State private var copied = false
-    @State private var showShare = false
-    @State private var shareItems: [Any] = []
     @State private var showEmptyAlert = false
 
     var body: some View {
@@ -78,9 +76,6 @@ struct SummaryView: View {
                 copied = false
                 reload()
             }
-            .sheet(isPresented: $showShare) {
-                ActivityView(items: shareItems)
-            }
             .alert("还没有记录", isPresented: $showEmptyAlert) {
                 Button("好", role: .cancel) {}
             } message: {
@@ -94,20 +89,16 @@ struct SummaryView: View {
     private func shareAsText() {
         guard !text.isEmpty else { showEmptyAlert = true; return }
         Haptic.tap()
-        shareItems = [text]
-        showShare = true
+        Sharer.share([text])
     }
 
     private func shareAsImage() {
         guard !text.isEmpty else { showEmptyAlert = true; return }
         Haptic.tap()
         if let image = renderSummaryImage() {
-            shareItems = [image]
-            showShare = true
+            Sharer.share([image])
         } else {
-            // 渲染失败兜底为文字
-            shareItems = [text]
-            showShare = true
+            Sharer.share([text])
         }
     }
 
@@ -142,15 +133,4 @@ struct SummaryView: View {
     private func reload() {
         text = SummaryBuilder.build(range: range)
     }
-}
-
-/// 系统分享面板（比 ShareLink 兼容性更好）
-struct ActivityView: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
