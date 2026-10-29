@@ -44,6 +44,14 @@ enum Fmt {
         return f.string(from: date)
     }
 
+    /// 10月30日 02:48:15 —— 每次胎动/宫缩的完整落点
+    static func mdHms(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "M月d日 HH:mm:ss"
+        return f.string(from: date)
+    }
+
     /// 00:35 / 12:04
     static func clock(_ interval: TimeInterval) -> String {
         let total = max(0, Int(interval))
