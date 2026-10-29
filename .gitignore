@@ -1,0 +1,20 @@
+# Xcode / build
+build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcodeproj
+JiQian/Info.plist
+
+# 产物
+*.ipa
+*.app
+Payload/
+*.dSYM.zip
+
+# macOS
+.DS_Store
+
+# 临时脚本
+_mkicon.py
