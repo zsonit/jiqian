@@ -31,10 +31,10 @@ enum Prefs {
         UserDefaults.standard.bool(forKey: PrefKey.holdMode)
     }
 
-    /// 每轮时长（分钟），默认 60
+    /// 每轮时长（分钟），默认 60，可选 5/10/15/30/45/60/75
     static var roundMin: Int {
         let v = UserDefaults.standard.integer(forKey: PrefKey.roundMin)
-        return v >= 15 && v <= 240 ? v : 60
+        return [5, 10, 15, 30, 45, 60, 75].contains(v) ? v : 60
     }
 
     static var edd: Date? {
