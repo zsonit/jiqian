@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AudioToolbox
 
 /// 与网页版一致的视觉语言：暖白纸感 + 深青主色，深色模式自动切换。
 enum Pal {
@@ -43,11 +44,36 @@ enum Haptic {
     private static let heavyGen = UIImpactFeedbackGenerator(style: .heavy)
     private static let notifGen = UINotificationFeedbackGenerator()
 
-    static func soft() { guard Prefs.hapticOn else { return }; lightGen.impactOccurred() }
-    static func tap() { guard Prefs.hapticOn else { return }; rigidGen.prepare(); rigidGen.impactOccurred() }
-    static func strong() { guard Prefs.hapticOn else { return }; heavyGen.prepare(); heavyGen.impactOccurred() }
-    static func success() { guard Prefs.hapticOn else { return }; notifGen.notificationOccurred(.success) }
-    static func warning() { guard Prefs.hapticOn else { return }; notifGen.notificationOccurred(.warning) }
+    /// 系统级强震动兜底：不依赖触感反馈生成器，任何机型都能震出来
+    private static func systemVibrate() {
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+    }
+
+    static func soft() {
+        guard Prefs.hapticOn else { return }
+        lightGen.impactOccurred()
+        systemVibrate()
+    }
+    static func tap() {
+        guard Prefs.hapticOn else { return }
+        rigidGen.prepare()
+        rigidGen.impactOccurred()
+        systemVibrate()
+    }
+    static func strong() {
+        guard Prefs.hapticOn else { return }
+        heavyGen.prepare()
+        heavyGen.impactOccurred()
+        systemVibrate()
+    }
+    static func success() {
+        guard Prefs.hapticOn else { return }
+        notifGen.notificationOccurred(.success)
+    }
+    static func warning() {
+        guard Prefs.hapticOn else { return }
+        notifGen.notificationOccurred(.warning)
+    }
 }
 
 // MARK: - 基础容器
