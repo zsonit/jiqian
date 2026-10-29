@@ -74,7 +74,7 @@ struct ToggleContractionIntent: AppIntent {
             let text = "已保存本次收缩，持续 \(Fmt.clock(duration))" + gapText + "。"
             return .result(dialog: "\(text)")
         case .busy:
-            let text = "计时状态异常，请打开记签确认。"
+            let text = "计时状态异常，请打开胎动确认。"
             return .result(dialog: "\(text)")
         }
     }
@@ -142,8 +142,8 @@ struct JiQianShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: RecordKickIntent(),
             phrases: [
-                "用\(.applicationName)记一次胎动",
-                "\(.applicationName)记胎动",
+                "\(.applicationName)记一笔",
+                "\(.applicationName)记一次胎动",
                 "\(.applicationName)胎动加一"
             ],
             shortTitle: "记一次胎动",
@@ -152,7 +152,7 @@ struct JiQianShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: StartKickCountIntent(),
             phrases: [
-                "用\(.applicationName)开始数胎动",
+                "\(.applicationName)开始计数",
                 "\(.applicationName)开始数胎动"
             ],
             shortTitle: "开始数胎动",
@@ -161,7 +161,7 @@ struct JiQianShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: ToggleContractionIntent(),
             phrases: [
-                "用\(.applicationName)记录宫缩",
+                "\(.applicationName)记录宫缩",
                 "\(.applicationName)宫缩开始或结束"
             ],
             shortTitle: "宫缩开始 / 结束",
@@ -170,7 +170,7 @@ struct JiQianShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: EndContractionIntent(),
             phrases: [
-                "用\(.applicationName)结束宫缩",
+                "\(.applicationName)结束宫缩",
                 "\(.applicationName)结束宫缩计时"
             ],
             shortTitle: "结束宫缩",
@@ -179,7 +179,7 @@ struct JiQianShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenSummaryIntent(),
             phrases: [
-                "用\(.applicationName)打开就诊摘要",
+                "\(.applicationName)打开就诊摘要",
                 "\(.applicationName)就诊摘要"
             ],
             shortTitle: "就诊摘要",

@@ -183,7 +183,7 @@ struct AlertBox: View {
 
 struct DisclaimerCard: View {
     var body: some View {
-        Text("这不是医疗设备。记签只帮你把时间点记清楚，方便你和医生沟通。任何「提示联系」都不等于诊断；胎动明显减少、破水、出血、持续剧痛时，请直接联系产科机构或急诊。")
+        Text("这不是医疗设备。胎动只帮你把时间点记清楚，方便你和医生沟通。任何「提示联系」都不等于诊断；胎动明显减少、破水、出血、持续剧痛时，请直接联系产科机构或急诊。")
             .font(.system(size: 12.5))
             .foregroundStyle(Pal.ink2)
             .fixedSize(horizontal: false, vertical: true)

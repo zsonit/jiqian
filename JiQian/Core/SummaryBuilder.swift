@@ -101,7 +101,7 @@ enum SummaryBuilder {
             lines.append("- 明细：\(detail)")
         }
         lines.append("")
-        lines.append("（本记录为患者自述，由「记签」整理，不构成诊断。）")
+        lines.append("（本记录为患者自述，由「胎动」整理，不构成诊断。）")
         return lines.joined(separator: "\n")
     }
 }

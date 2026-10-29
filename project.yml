@@ -24,7 +24,7 @@ targets:
     info:
       path: JiQian/Info.plist
       properties:
-        CFBundleDisplayName: 记签
+        CFBundleDisplayName: 胎动
         CFBundleName: JiQian
         CFBundleShortVersionString: "1.0"
         CFBundleVersion: "1"

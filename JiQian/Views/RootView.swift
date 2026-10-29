@@ -13,7 +13,7 @@ struct RootView: View {
                 .tabItem { Label("摘要", systemImage: "doc.text") }
                 .tag(1)
             ActionsView()
-                .tabItem { Label("动作", systemImage: "bolt") }
+                .tabItem { Label("快捷指令", systemImage: "bolt") }
                 .tag(2)
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }

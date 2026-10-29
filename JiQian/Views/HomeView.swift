@@ -81,7 +81,7 @@ struct HomeView: View {
                     Image(systemName: "circle.dashed")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(Pal.brand)
-                    Text("记签")
+                    Text("胎动")
                         .font(.system(size: 14, weight: .semibold))
                         .tracking(1.2)
                 }

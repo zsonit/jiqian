@@ -101,7 +101,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Text("记签 1.0 · 本地优先，无账号、无上传、无广告。")
+                    Text("胎动 1.0 · 本地优先，无账号、无上传、无广告。")
                         .font(.footnote)
                         .foregroundStyle(Pal.ink2)
                     Text("规则阈值仅用于教育提示与联系触发，不替代医生评估；实际随访与入院方案以建档机构指示为准。")
