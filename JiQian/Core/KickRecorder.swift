@@ -14,7 +14,25 @@ struct KickOutcome: Sendable {
 @MainActor
 enum KickRecorder {
     static let duplicateWindow: TimeInterval = 1.2
-    static let sessionTTL: TimeInterval = 3 * 3600
+
+    /// 每轮时长，到点自动收尾并开启下一轮
+    static var roundLength: TimeInterval { Double(Prefs.roundMin) * 60 }
+
+    /// 到点自动翻轮：结束超时轮次并立即开启下一轮（持续循环，直到手动结束）。
+    @discardableResult
+    static func rolloverIfNeeded(at date: Date = Date()) throws -> Bool {
+        let ctx = JiQianStore.context
+        guard let current = try activeSession(in: ctx) else { return false }
+        guard date.timeIntervalSince(current.startedAt) >= roundLength else { return false }
+        current.endedAt = current.startedAt.addingTimeInterval(roundLength)
+        current.finishedReason = "timeup"
+        let next = KickSession(startedAt: current.endedAt ?? date,
+                               targetCount: Prefs.target,
+                               source: current.source)
+        ctx.insert(next)
+        try ctx.save()
+        return true
+    }
 
     static func activeSession(in ctx: ModelContext) throws -> KickSession? {
         let all = try ctx.fetch(FetchDescriptor<KickSession>(sortBy: [SortDescriptor(\.startedAt, order: .reverse)]))
@@ -56,9 +74,10 @@ enum KickRecorder {
 
     static func resolveSession(source: RecordSource, at date: Date, in ctx: ModelContext) throws -> KickSession {
         if let current = try activeSession(in: ctx) {
-            if date.timeIntervalSince(current.startedAt) > sessionTTL {
-                current.endedAt = current.startedAt.addingTimeInterval(sessionTTL)
-                current.finishedReason = "expired"
+            if date.timeIntervalSince(current.startedAt) >= roundLength {
+                // 已过本轮时长：上一轮按整点收尾，本次记录落入新一轮
+                current.endedAt = current.startedAt.addingTimeInterval(roundLength)
+                current.finishedReason = "timeup"
                 try ctx.save()
             } else {
                 return current
