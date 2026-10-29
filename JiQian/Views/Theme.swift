@@ -37,11 +37,17 @@ extension UIColor {
 }
 
 enum Haptic {
-    static func soft() { guard Prefs.hapticOn else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-    static func tap() { guard Prefs.hapticOn else { return }; UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
-    static func strong() { guard Prefs.hapticOn else { return }; UIImpactFeedbackGenerator(style: .heavy).impactOccurred() }
-    static func success() { guard Prefs.hapticOn else { return }; UINotificationFeedbackGenerator().notificationOccurred(.success) }
-    static func warning() { guard Prefs.hapticOn else { return }; UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+    // 常驻生成器 + prepare()，避免临时对象被提前释放导致震动丢失
+    private static let lightGen = UIImpactFeedbackGenerator(style: .light)
+    private static let rigidGen = UIImpactFeedbackGenerator(style: .rigid)
+    private static let heavyGen = UIImpactFeedbackGenerator(style: .heavy)
+    private static let notifGen = UINotificationFeedbackGenerator()
+
+    static func soft() { guard Prefs.hapticOn else { return }; lightGen.impactOccurred() }
+    static func tap() { guard Prefs.hapticOn else { return }; rigidGen.prepare(); rigidGen.impactOccurred() }
+    static func strong() { guard Prefs.hapticOn else { return }; heavyGen.prepare(); heavyGen.impactOccurred() }
+    static func success() { guard Prefs.hapticOn else { return }; notifGen.notificationOccurred(.success) }
+    static func warning() { guard Prefs.hapticOn else { return }; notifGen.notificationOccurred(.warning) }
 }
 
 // MARK: - 基础容器

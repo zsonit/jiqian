@@ -43,6 +43,10 @@ struct KickView: View {
             // 到点自动收尾本轮并无缝开启下一轮
             _ = try? KickRecorder.rolloverIfNeeded(at: now)
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // 从后台回来立即校正：中间错过的每一轮按时间边界补齐
+            _ = try? KickRecorder.rolloverIfNeeded()
+        }
         .confirmationDialog("结束这一轮？", isPresented: $showEndConfirm, titleVisibility: .visible) {
             Button("结束本轮", role: .destructive) {
                 try? KickRecorder.endActiveSession(reason: "manual")
