@@ -9,6 +9,8 @@ enum PrefKey {
     static let phone = "providerPhone"
     static let risks = "highRiskTags"
     static let sound = "tapSoundEnabled"
+    static let soundVolume = "tapSoundVolume"
+    static let haptic = "tapHapticEnabled"
 }
 
 /// 设置项统一走 UserDefaults，视图侧用 @AppStorage 双向绑定，
@@ -52,6 +54,19 @@ enum Prefs {
         let d = UserDefaults.standard
         if d.object(forKey: PrefKey.sound) == nil { return true } // 默认开
         return d.bool(forKey: PrefKey.sound)
+    }
+
+    static var hapticOn: Bool {
+        let d = UserDefaults.standard
+        if d.object(forKey: PrefKey.haptic) == nil { return true } // 默认开
+        return d.bool(forKey: PrefKey.haptic)
+    }
+
+    /// 提示音音量 0...1，默认拉满
+    static var soundVolume: Double {
+        let d = UserDefaults.standard
+        if d.object(forKey: PrefKey.soundVolume) == nil { return 1.0 }
+        return min(1.0, max(0.0, d.double(forKey: PrefKey.soundVolume)))
     }
 
     static let allRisks = [
