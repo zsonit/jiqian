@@ -99,7 +99,7 @@ struct SettingsView: View {
 
                 Section {
                     HStack {
-                        Text("胎动事件")
+                        Text("胎动记录")
                         Spacer()
                         Text("\(kickEvents.count) 条").foregroundStyle(Pal.ink2)
                     }
