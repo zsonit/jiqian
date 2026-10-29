@@ -7,6 +7,8 @@ struct SettingsView: View {
     @AppStorage(PrefKey.windowMin) private var windowMin: Int = 120
     @AppStorage(PrefKey.holdMode) private var holdMode: Bool = false
     @AppStorage(PrefKey.sound) private var soundOn: Bool = true
+    @AppStorage(PrefKey.soundVolume) private var soundVolume: Double = 1.0
+    @AppStorage(PrefKey.haptic) private var hapticOn: Bool = true
     @AppStorage(PrefKey.provider) private var provider: String = ""
     @AppStorage(PrefKey.phone) private var phone: String = ""
     @AppStorage(PrefKey.risks) private var risksRaw: String = ""
@@ -61,6 +63,21 @@ struct SettingsView: View {
                     }
                     Toggle("宫缩用按住方式", isOn: $holdMode)
                     Toggle("点击提示音", isOn: $soundOn)
+                    Toggle("点击震动", isOn: $hapticOn)
+                    if soundOn {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("提示音音量")
+                                Spacer()
+                                Text("\(Int(round(soundVolume * 100)))%")
+                                    .foregroundStyle(Pal.ink2)
+                                    .monospacedDigit()
+                            }
+                            Slider(value: $soundVolume, in: 0...1) { editing in
+                                if !editing { Sfx.tap() }
+                            }
+                        }
+                    }
                 }
 
                 Section("产科联系方式") {
