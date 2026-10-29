@@ -65,24 +65,27 @@ struct KickView: View {
     private func activeContent(_ session: KickSession) -> some View {
         let count = activeEvents.count
         let goal = session.targetCount
-        let elapsed = Date().timeIntervalSince(session.startedAt)
-        let remain = max(0, KickRecorder.roundLength - elapsed)
         let roundNo = sessions.filter {
             Calendar.current.isDate($0.startedAt, inSameDayAs: session.startedAt) && $0.startedAt <= session.startedAt
         }.count
 
-        VStack(alignment: .leading, spacing: 4) {
-            Text("第 \(roundNo) 轮 · 第 \(count) 次")
-                .font(.system(size: 30, weight: .bold))
-                .foregroundStyle(Pal.ink)
-            Text("开始于 \(Fmt.hhmm(session.startedAt)) · 本轮剩余 \(Fmt.clock(remain))")
-                .font(.system(size: 14))
-                .monospacedDigit()
-                .foregroundStyle(remain <= 300 ? Pal.danger : Pal.ink2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // 每秒重算剩余时间，倒计时真正动态跳动
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            let remain = max(0, KickRecorder.roundLength - timeline.date.timeIntervalSince(session.startedAt))
 
-        pad(count: count, goal: goal, remain: remain)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("第 \(roundNo) 轮 · 第 \(count) 次")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(Pal.ink)
+                Text("开始于 \(Fmt.hhmm(session.startedAt)) · 本轮剩余 \(Fmt.clock(remain))")
+                    .font(.system(size: 14))
+                    .monospacedDigit()
+                    .foregroundStyle(remain <= 300 ? Pal.danger : Pal.ink2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            pad(count: count, goal: goal, remain: remain)
+        }
 
         if count == 0 && session.lessThanUsualRaw < 0 {
             CardBox(fill: Pal.goldSoft, stroke: .clear) {
@@ -209,12 +212,10 @@ struct KickView: View {
                 Text("到点自动开始下一轮")
                     .font(.system(size: 12))
                     .foregroundStyle(Pal.ink3)
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(lastText)
-                        .font(.system(size: 12))
-                        .monospacedDigit()
-                        .foregroundStyle(Pal.ink3)
-                }
+                Text(lastText)
+                    .font(.system(size: 12))
+                    .monospacedDigit()
+                    .foregroundStyle(Pal.ink3)
             }
         }
         .frame(width: 296, height: 296)
