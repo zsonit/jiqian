@@ -69,7 +69,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    ForEach(Pref.allRisks, id: \.self) { tag in
+                    ForEach(Prefs.allRisks, id: \.self) { tag in
                         Toggle(tag, isOn: binding(for: tag))
                     }
                 } header: {
@@ -126,7 +126,7 @@ struct SettingsView: View {
             set: { isOn in
                 var set = riskSet
                 if isOn { set.insert(tag) } else { set.remove(tag) }
-                risksRaw = Pref.allRisks.filter { set.contains($0) }.joined(separator: ",")
+                risksRaw = Prefs.allRisks.filter { set.contains($0) }.joined(separator: ",")
             }
         )
     }
