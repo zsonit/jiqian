@@ -230,6 +230,7 @@ struct ContractionView: View {
                 Haptic.warning()
             } else {
                 Haptic.strong()
+                Sfx.tap()
             }
         } catch {
             Haptic.warning()
@@ -243,6 +244,7 @@ struct ContractionView: View {
                 Haptic.warning()
             } else {
                 Haptic.success()
+                Sfx.success()
             }
         } catch {
             Haptic.warning()
