@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage(PrefKey.target) private var target: Int = 10
     @AppStorage(PrefKey.windowMin) private var windowMin: Int = 120
     @AppStorage(PrefKey.holdMode) private var holdMode: Bool = false
+    @AppStorage(PrefKey.sound) private var soundOn: Bool = true
     @AppStorage(PrefKey.provider) private var provider: String = ""
     @AppStorage(PrefKey.phone) private var phone: String = ""
     @AppStorage(PrefKey.risks) private var risksRaw: String = ""
@@ -59,6 +60,7 @@ struct SettingsView: View {
                         }
                     }
                     Toggle("宫缩用按住方式", isOn: $holdMode)
+                    Toggle("点击提示音", isOn: $soundOn)
                 }
 
                 Section("产科联系方式") {
