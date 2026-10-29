@@ -37,11 +37,11 @@ extension UIColor {
 }
 
 enum Haptic {
-    static func soft() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-    static func tap() { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
-    static func strong() { UIImpactFeedbackGenerator(style: .heavy).impactOccurred() }
-    static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
-    static func warning() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+    static func soft() { guard Prefs.hapticOn else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    static func tap() { guard Prefs.hapticOn else { return }; UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+    static func strong() { guard Prefs.hapticOn else { return }; UIImpactFeedbackGenerator(style: .heavy).impactOccurred() }
+    static func success() { guard Prefs.hapticOn else { return }; UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    static func warning() { guard Prefs.hapticOn else { return }; UINotificationFeedbackGenerator().notificationOccurred(.warning) }
 }
 
 // MARK: - 基础容器
