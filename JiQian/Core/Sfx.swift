@@ -1,15 +1,33 @@
-import AudioToolbox
+import AVFoundation
 import Foundation
 
-/// 点击提示音：使用 iOS 系统音效，无需打包音频文件，跟随静音拨片。
+/// 点击提示音：使用打包的自定义 WAV，AVAudioPlayer 播放，
+/// 音量跟随设置里的「提示音音量」滑杆；会话类别为 ambient，跟随静音拨片。
 enum Sfx {
-    static func tap() {
-        guard Prefs.soundOn else { return }
-        AudioServicesPlaySystemSound(1104) // 短促的 tick
+    private static let session: AVAudioSession = {
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.ambient, options: [.mixWithOthers])
+        try? s.setActive(true)
+        return s
+    }()
+
+    private static func player(_ name: String) -> AVAudioPlayer? {
+        _ = session
+        guard let url = Bundle.main.url(forResource: name, withExtension: "wav") else { return nil }
+        return try? AVAudioPlayer(contentsOf: url)
     }
 
-    static func success() {
+    private static let tapPlayer = player("tap")
+    private static let chimePlayer = player("chime")
+
+    private static func play(_ p: AVAudioPlayer?) {
         guard Prefs.soundOn else { return }
-        AudioServicesPlaySystemSound(1025) // 轻快的「叮」
+        guard let p else { return }
+        p.volume = Float(Prefs.soundVolume)
+        p.currentTime = 0
+        p.play()
     }
+
+    static func tap() { play(tapPlayer) }
+    static func success() { play(chimePlayer) }
 }
