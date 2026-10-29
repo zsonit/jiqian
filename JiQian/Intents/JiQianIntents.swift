@@ -17,9 +17,15 @@ struct RecordKickIntent: AppIntent {
             let text = "这看起来是重复点按，没有重复记录。"
             return .result(dialog: "\(text)")
         }
-        let remaining = max(0, outcome.target - outcome.count)
-        let suffix = outcome.count >= outcome.target ? "已达到本轮目标。" : "距目标还差 \(remaining) 次。"
-        let text = "已记录一次胎动，本轮第 \(outcome.count) 次。" + suffix
+        let remainText = try await MainActor.run { () -> String in
+            let ctx = JiQianStore.context
+            if let session = try KickRecorder.activeSession(in: ctx) {
+                let remain = max(0, KickRecorder.roundLength - Date().timeIntervalSince(session.startedAt))
+                return String(format: "本轮剩余 %d:%02d。", Int(remain) / 60, Int(remain) % 60)
+            }
+            return ""
+        }
+        let text = "已记录一次胎动，本轮第 \(outcome.count) 次。\(remainText)"
         return .result(dialog: "\(text)")
     }
 }
@@ -32,10 +38,11 @@ struct StartKickCountIntent: AppIntent {
     static var openAppWhenRun: Bool = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let target = try await MainActor.run { () throws -> Int in
-            try KickRecorder.startNewSession(source: .shortcut).targetCount
+        let minutes = try await MainActor.run { () throws -> Int in
+            try KickRecorder.startNewSession(source: .shortcut)
+            return Prefs.roundMin
         }
-        let text = "已开始新一轮胎动计数，目标 \(target) 次。"
+        let text = "已开始新一轮胎动计数，时长 \(minutes) 分钟，到点自动开始下一轮。"
         return .result(dialog: "\(text)")
     }
 }

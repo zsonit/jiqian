@@ -6,9 +6,7 @@ struct KickView: View {
     @Query(sort: \KickSession.startedAt, order: .reverse) private var sessions: [KickSession]
     @Query(sort: \KickEvent.occurredAt, order: .reverse) private var events: [KickEvent]
     @AppStorage(PrefKey.phone) private var phone: String = ""
-    @AppStorage(PrefKey.target) private var target: Int = 10
 
-    @State private var showTargetSheet = false
     @State private var showEndConfirm = false
 
     private var active: KickSession? {
@@ -45,10 +43,6 @@ struct KickView: View {
             // 到点自动收尾本轮并无缝开启下一轮
             _ = try? KickRecorder.rolloverIfNeeded(at: now)
         }
-        .sheet(isPresented: $showTargetSheet) {
-            targetReachedSheet
-                .presentationDetents([.height(320)])
-        }
         .confirmationDialog("结束这一轮？", isPresented: $showEndConfirm, titleVisibility: .visible) {
             Button("结束本轮", role: .destructive) {
                 try? KickRecorder.endActiveSession(reason: "manual")
@@ -64,7 +58,6 @@ struct KickView: View {
     @ViewBuilder
     private func activeContent(_ session: KickSession) -> some View {
         let count = activeEvents.count
-        let goal = session.targetCount
         let roundNo = sessions.filter {
             Calendar.current.isDate($0.startedAt, inSameDayAs: session.startedAt) && $0.startedAt <= session.startedAt
         }.count
@@ -84,7 +77,7 @@ struct KickView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            pad(count: count, goal: goal, remain: remain)
+            pad(count: count, remain: remain)
         }
 
         if count == 0 && session.lessThanUsualRaw < 0 {
@@ -107,7 +100,7 @@ struct KickView: View {
         if session.lessThanUsualRaw == 1 {
             AlertBox(
                 title: "先联系，再继续记",
-                message: "感觉明显减少时，不需要等数完 \(goal) 次。直接联系产科机构，把你的感受和今天的记录一起说清楚。",
+                message: "感觉明显减少时，不用等这一轮结束。直接联系产科机构，把你的感受和今天的记录一起说清楚。",
                 phone: phone
             )
         }
@@ -178,7 +171,7 @@ struct KickView: View {
         .buttonStyle(.plain)
     }
 
-    private func pad(count: Int, goal: Int, remain: TimeInterval) -> some View {
+    private func pad(count: Int, remain: TimeInterval) -> some View {
         let roundProgress = min(1.0, max(0, 1.0 - remain / KickRecorder.roundLength))
         return ZStack {
             Circle()
@@ -261,7 +254,7 @@ struct KickView: View {
                 }
             }
 
-            BigButton(title: "开始数胎动", subtitle: "目标 \(target) 次") {
+            BigButton(title: "开始数胎动", subtitle: "每轮 \(Prefs.roundMin) 分钟 · 到点自动下一轮") {
                 _ = try? KickRecorder.startNewSession(source: .app)
                 Haptic.tap()
             }
@@ -276,32 +269,6 @@ struct KickView: View {
         }
     }
 
-    private var targetReachedSheet: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "checkmark")
-                .font(.system(size: 26, weight: .bold))
-                .foregroundStyle(Pal.brand)
-                .frame(width: 60, height: 60)
-                .background(Pal.brandSoft)
-                .clipShape(Circle())
-            Text("本轮已到 \(active?.targetCount ?? target) 次")
-                .font(.system(size: 21, weight: .bold))
-                .foregroundStyle(Pal.ink)
-            Text("可以结束这一轮了。如果你仍然感觉比平时少，直接联系产科机构。")
-                .font(.system(size: 14))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Pal.ink2)
-            Spacer(minLength: 0)
-            BigButton(title: "结束本轮") {
-                try? KickRecorder.endActiveSession(reason: "target")
-                showTargetSheet = false
-            }
-            BigButton(title: "继续记", style: .ghost) {
-                showTargetSheet = false
-            }
-        }
-        .padding(22)
-    }
 
     private func record() {
         do {
@@ -312,9 +279,6 @@ struct KickView: View {
             }
             Haptic.tap()
             Sfx.tap()
-            if outcome.count >= outcome.target {
-                showTargetSheet = true
-            }
         } catch {
             Haptic.warning()
         }

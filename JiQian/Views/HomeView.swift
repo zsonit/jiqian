@@ -120,7 +120,7 @@ struct HomeView: View {
                 BigCard(
                     caption: "胎动",
                     value: activeSession != nil ? "\(activeKickCount)" : "\(todayKicks)",
-                    unit: activeSession != nil ? "次 / 本轮目标 \(activeSession?.targetCount ?? 10)" : "次 · 今日",
+                    unit: activeSession != nil ? "次 · 本轮进行中" : "次 · 今日",
                     subtitle: activeSession != nil
                         ? "本轮进行中 · 开始于 \(Fmt.hhmm(activeSession?.startedAt ?? Date()))"
                         : "轻点进入，单点即记一次",
