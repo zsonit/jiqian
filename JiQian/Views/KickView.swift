@@ -41,6 +41,10 @@ struct KickView: View {
         .background(Pal.bg.ignoresSafeArea())
         .navigationTitle("胎动")
         .navigationBarTitleDisplayMode(.inline)
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now in
+            // 到点自动收尾本轮并无缝开启下一轮
+            _ = try? KickRecorder.rolloverIfNeeded(at: now)
+        }
         .sheet(isPresented: $showTargetSheet) {
             targetReachedSheet
                 .presentationDetents([.height(320)])
@@ -62,18 +66,23 @@ struct KickView: View {
         let count = activeEvents.count
         let goal = session.targetCount
         let elapsed = Date().timeIntervalSince(session.startedAt)
+        let remain = max(0, KickRecorder.roundLength - elapsed)
+        let roundNo = sessions.filter {
+            Calendar.current.isDate($0.startedAt, inSameDayAs: session.startedAt) && $0.startedAt <= session.startedAt
+        }.count
 
         VStack(alignment: .leading, spacing: 4) {
-            Text("第 \(count) 次")
+            Text("第 \(roundNo) 轮 · 第 \(count) 次")
                 .font(.system(size: 30, weight: .bold))
                 .foregroundStyle(Pal.ink)
-            Text("开始于 \(Fmt.hhmm(session.startedAt)) · 已用 \(Fmt.duration(elapsed))")
+            Text("开始于 \(Fmt.hhmm(session.startedAt)) · 本轮剩余 \(Fmt.clock(remain))")
                 .font(.system(size: 14))
-                .foregroundStyle(Pal.ink2)
+                .monospacedDigit()
+                .foregroundStyle(remain <= 300 ? Pal.danger : Pal.ink2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
-        pad(count: count, goal: goal)
+        pad(count: count, goal: goal, remain: remain)
 
         if count == 0 && session.lessThanUsualRaw < 0 {
             CardBox(fill: Pal.goldSoft, stroke: .clear) {
@@ -166,8 +175,8 @@ struct KickView: View {
         .buttonStyle(.plain)
     }
 
-    private func pad(count: Int, goal: Int) -> some View {
-        let progress = goal > 0 ? min(1.0, Double(count) / Double(goal)) : 0
+    private func pad(count: Int, goal: Int, remain: TimeInterval) -> some View {
+        let roundProgress = min(1.0, max(0, 1.0 - remain / KickRecorder.roundLength))
         return ZStack {
             Circle()
                 .fill(RadialGradient(colors: [Pal.card, Pal.brandSoft],
@@ -178,8 +187,9 @@ struct KickView: View {
                 .strokeBorder(Pal.line, lineWidth: 9)
                 .padding(9)
             Circle()
-                .trim(from: 0, to: progress)
-                .stroke(Pal.brand, style: StrokeStyle(lineWidth: 9, lineCap: .round))
+                .trim(from: 0, to: roundProgress)
+                .stroke(remain <= 300 ? Pal.danger : Pal.brand,
+                        style: StrokeStyle(lineWidth: 9, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .padding(9)
             VStack(spacing: 8) {
@@ -188,13 +198,17 @@ struct KickView: View {
                         .font(.system(size: 74, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(Pal.brand)
-                    Text("/\(goal)")
+                    Text("次")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(Pal.ink2)
                 }
-                Text("轻点任意位置记录")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Pal.ink2)
+                Text("本轮剩余 \(Fmt.clock(remain))")
+                    .font(.system(size: 16, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(remain <= 300 ? Pal.danger : Pal.ink)
+                Text("到点自动开始下一轮")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Pal.ink3)
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     Text(lastText)
                         .font(.system(size: 12))
@@ -251,7 +265,7 @@ struct KickView: View {
                 Haptic.tap()
             }
 
-            Text("开始后可以直接离开应用，用快捷指令记，不用一直开着这个页面。")
+            Text("开始后每一轮 \(Prefs.roundMin) 分钟倒计时，到点自动无缝开始下一轮，随时可手动结束。离开应用用快捷指令记录同样有效。")
                 .font(.system(size: 13))
                 .foregroundStyle(Pal.ink2)
                 .padding(14)
