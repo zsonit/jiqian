@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage(PrefKey.target) private var target: Int = 10
     @AppStorage(PrefKey.windowMin) private var windowMin: Int = 120
     @AppStorage(PrefKey.holdMode) private var holdMode: Bool = false
+    @AppStorage(PrefKey.roundMin) private var roundMin: Int = 60
     @AppStorage(PrefKey.sound) private var soundOn: Bool = true
     @AppStorage(PrefKey.soundVolume) private var soundVolume: Double = 1.0
     @AppStorage(PrefKey.haptic) private var hapticOn: Bool = true
@@ -54,6 +55,11 @@ struct SettingsView: View {
                     Picker("每轮目标", selection: $target) {
                         ForEach([6, 8, 10, 12, 14], id: \.self) { value in
                             Text("\(value) 次").tag(value)
+                        }
+                    }
+                    Picker("每轮时长", selection: $roundMin) {
+                        ForEach([30, 60, 90, 120], id: \.self) { value in
+                            Text("\(value) 分钟").tag(value)
                         }
                     }
                     Picker("计数窗口", selection: $windowMin) {
