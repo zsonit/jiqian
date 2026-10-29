@@ -44,11 +44,11 @@ enum Fmt {
         return f.string(from: date)
     }
 
-    /// 10月30日 02:48:15 —— 每次胎动/宫缩的完整落点
+    /// 2026年10月30日 02:48:15 —— 每次胎动/宫缩的完整落点（含年）
     static func mdHms(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = "M月d日 HH:mm:ss"
+        f.dateFormat = "yyyy年M月d日 HH:mm:ss"
         return f.string(from: date)
     }
 
