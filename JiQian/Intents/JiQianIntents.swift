@@ -144,7 +144,7 @@ struct JiQianShortcuts: AppShortcutsProvider {
             phrases: [
                 "用\(.applicationName)记一次胎动",
                 "\(.applicationName)记胎动",
-                "记一次胎动"
+                "\(.applicationName)胎动加一"
             ],
             shortTitle: "记一次胎动",
             systemImageName: "waveform.path.ecg"
@@ -153,7 +153,7 @@ struct JiQianShortcuts: AppShortcutsProvider {
             intent: StartKickCountIntent(),
             phrases: [
                 "用\(.applicationName)开始数胎动",
-                "开始数胎动"
+                "\(.applicationName)开始数胎动"
             ],
             shortTitle: "开始数胎动",
             systemImageName: "timer"
@@ -171,7 +171,7 @@ struct JiQianShortcuts: AppShortcutsProvider {
             intent: EndContractionIntent(),
             phrases: [
                 "用\(.applicationName)结束宫缩",
-                "结束宫缩计时"
+                "\(.applicationName)结束宫缩计时"
             ],
             shortTitle: "结束宫缩",
             systemImageName: "checkmark.circle"
@@ -180,7 +180,7 @@ struct JiQianShortcuts: AppShortcutsProvider {
             intent: OpenSummaryIntent(),
             phrases: [
                 "用\(.applicationName)打开就诊摘要",
-                "打开就诊摘要"
+                "\(.applicationName)就诊摘要"
             ],
             shortTitle: "就诊摘要",
             systemImageName: "doc.text"
