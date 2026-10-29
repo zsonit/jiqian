@@ -120,14 +120,15 @@ struct KickView: View {
                                 Circle()
                                     .fill(Pal.brand)
                                     .frame(width: 7, height: 7)
-                                Text(Fmt.hhmmss(event.occurredAt))
-                                    .font(.system(size: 13))
-                                    .monospacedDigit()
-                                    .foregroundStyle(Pal.ink2)
-                                    .frame(width: 74, alignment: .leading)
-                                Text(event.source.label)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(Pal.ink3)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(Fmt.mdHms(event.occurredAt))
+                                        .font(.system(size: 13))
+                                        .monospacedDigit()
+                                        .foregroundStyle(Pal.ink2)
+                                    Text("第 \(activeEvents.firstIndex(where: { $0.id == event.id }).map(String.init) ?? "-") 次 · \(event.source.label)")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(Pal.ink3)
+                                }
                                 Spacer()
                                 Button {
                                     context.delete(event)
@@ -295,6 +296,7 @@ struct KickView: View {
                 return
             }
             Haptic.tap()
+            Sfx.tap()
             if outcome.count >= outcome.target {
                 showTargetSheet = true
             }
