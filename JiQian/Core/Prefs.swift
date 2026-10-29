@@ -11,6 +11,7 @@ enum PrefKey {
     static let sound = "tapSoundEnabled"
     static let soundVolume = "tapSoundVolume"
     static let haptic = "tapHapticEnabled"
+    static let roundMin = "kickRoundMinutes"
 }
 
 /// 设置项统一走 UserDefaults，视图侧用 @AppStorage 双向绑定，
@@ -28,6 +29,12 @@ enum Prefs {
 
     static var holdMode: Bool {
         UserDefaults.standard.bool(forKey: PrefKey.holdMode)
+    }
+
+    /// 每轮时长（分钟），默认 60
+    static var roundMin: Int {
+        let v = UserDefaults.standard.integer(forKey: PrefKey.roundMin)
+        return v >= 15 && v <= 240 ? v : 60
     }
 
     static var edd: Date? {
