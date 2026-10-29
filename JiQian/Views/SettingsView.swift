@@ -3,7 +3,6 @@ import SwiftData
 
 struct SettingsView: View {
     @AppStorage(PrefKey.edd) private var eddTimestamp: Double = 0
-    @AppStorage(PrefKey.target) private var target: Int = 10
     @AppStorage(PrefKey.windowMin) private var windowMin: Int = 120
     @AppStorage(PrefKey.holdMode) private var holdMode: Bool = false
     @AppStorage(PrefKey.roundMin) private var roundMin: Int = 60
@@ -52,13 +51,8 @@ struct SettingsView: View {
                         Spacer()
                         Text(gestationLabel).foregroundStyle(Pal.ink2)
                     }
-                    Picker("每轮目标", selection: $target) {
-                        ForEach([6, 8, 10, 12, 14], id: \.self) { value in
-                            Text("\(value) 次").tag(value)
-                        }
-                    }
                     Picker("每轮时长", selection: $roundMin) {
-                        ForEach([30, 60, 90, 120], id: \.self) { value in
+                        ForEach([5, 10, 15, 30, 45, 60, 75], id: \.self) { value in
                             Text("\(value) 分钟").tag(value)
                         }
                     }
