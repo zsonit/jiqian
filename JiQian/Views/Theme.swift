@@ -26,6 +26,10 @@ extension Color {
             trait.userInterfaceStyle == .dark ? UIColor(rgb: dark) : UIColor(rgb: light)
         })
     }
+
+    init(hex: UInt32) {
+        self = Color(UIColor(rgb: hex))
+    }
 }
 
 extension UIColor {
