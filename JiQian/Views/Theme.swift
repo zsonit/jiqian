@@ -73,10 +73,26 @@ enum Haptic {
     static func success() {
         guard Prefs.hapticOn else { return }
         notifGen.notificationOccurred(.success)
+        systemVibrate()
     }
     static func warning() {
         guard Prefs.hapticOn else { return }
         notifGen.notificationOccurred(.warning)
+        systemVibrate()
+    }
+}
+
+/// 用 UIKit 直接弹系统分享面板，兼容性最好
+@MainActor
+enum Sharer {
+    static func share(_ items: [Any]) {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let root = scene.keyWindow?.rootViewController else { return }
+        var top = root
+        while let presented = top.presentedViewController { top = presented }
+        let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        vc.popoverPresentationController?.sourceView = top.view
+        top.present(vc, animated: true)
     }
 }
 
