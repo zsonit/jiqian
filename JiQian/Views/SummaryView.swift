@@ -3,7 +3,14 @@ import SwiftData
 import UIKit
 
 struct SummaryView: View {
-    @State private var range: SummaryRange = .day
+    private enum Scope: String, CaseIterable, Identifiable {
+        case byDay, all
+        var id: String { rawValue }
+        var label: String { self == .byDay ? "按日期" : "全部" }
+    }
+
+    @State private var scope: Scope = .byDay
+    @State private var selectedDate = Date()
     @State private var text: String = ""
     @State private var copied = false
     @State private var showEmptyAlert = false
@@ -12,12 +19,24 @@ struct SummaryView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Picker("范围", selection: $range) {
-                        ForEach(SummaryRange.allCases) { item in
+                    Picker("范围", selection: $scope) {
+                        ForEach(Scope.allCases) { item in
                             Text(item.label).tag(item)
                         }
                     }
                     .pickerStyle(.segmented)
+
+                    if scope == .byDay {
+                        CardBox {
+                            DatePicker(
+                                "选择日期",
+                                selection: $selectedDate,
+                                displayedComponents: .date
+                            )
+                            .datePickerStyle(.graphical)
+                            .tint(Pal.brand)
+                        }
+                    }
 
                     CardBox {
                         Text(text)
@@ -53,7 +72,7 @@ struct SummaryView: View {
                         }
                     }
 
-                    Text("分享图片在微信里最稳；如果对方用邮件或备忘录，可以选「分享文字」。摘要只写事实：时间、次数、时长、间隔。")
+                    Text("日历可以翻到任意月份查看历史记录；分享图片在微信里最稳。摘要只写事实：时间、次数、时长、间隔。")
                         .font(.system(size: 13))
                         .foregroundStyle(Pal.ink2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -72,7 +91,11 @@ struct SummaryView: View {
             .navigationTitle("就诊摘要")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { reload() }
-            .onChange(of: range) { _, _ in
+            .onChange(of: scope) { _, _ in
+                copied = false
+                reload()
+            }
+            .onChange(of: selectedDate) { _, _ in
                 copied = false
                 reload()
             }
@@ -105,7 +128,10 @@ struct SummaryView: View {
     /// 把摘要文本渲染成白底长图，微信等以图片形式接收
     @MainActor
     private func renderSummaryImage() -> UIImage? {
-        let title = "胎动 · 就诊摘要（\(range.label)）\n\(Fmt.longDate(Date()))"
+        let periodTitle = scope == .byDay
+            ? "胎动 · 就诊摘要 · \(Fmt.longDate(selectedDate))"
+            : "胎动 · 就诊摘要（全部记录）"
+        let title = "\(periodTitle)\n\(Fmt.longDate(Date()))"
         let content = VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.system(size: 17, weight: .bold))
@@ -131,6 +157,8 @@ struct SummaryView: View {
     }
 
     private func reload() {
-        text = SummaryBuilder.build(range: range)
+        text = scope == .byDay
+            ? SummaryBuilder.build(day: selectedDate)
+            : SummaryBuilder.build(range: .all)
     }
 }
