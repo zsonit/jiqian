@@ -14,8 +14,8 @@ struct RootView: View {
             page(SummaryView(), index: 1)
             page(SettingsView(), index: 2)
         }
-        // 页面切换：缓出曲线，新页从点击处渐渐延伸铺满（无弹跳）
-        .animation(.easeOut(duration: 0.46), value: tab)
+        // 页面切换：快速缓出，从点击处延伸铺满
+        .animation(.easeOut(duration: 0.24), value: tab)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GlassTabBar(selection: $tab) { tag in
                 // 三颗按钮对应的横向位置，延伸原点贴到按钮处
@@ -79,7 +79,7 @@ private struct GlassPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
-            .animation(.easeOut(duration: 0.24),
+            .animation(.easeOut(duration: 0.14),
                        value: configuration.isPressed)
     }
 }
@@ -96,7 +96,7 @@ struct GlassTabBar: View {
             item(icon: "doc.text", title: "摘要", tag: 1)
             item(icon: "gearshape", title: "设置", tag: 2)
         }
-        .animation(.easeOut(duration: 0.38), value: selection)
+        .animation(.easeOut(duration: 0.22), value: selection)
         .padding(6)
         .modifier(LiquidGlass(interactive: false))
         .padding(.horizontal, 20)
