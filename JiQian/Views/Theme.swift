@@ -96,6 +96,57 @@ enum Sharer {
     }
 }
 
+// MARK: - 液态玻璃风格
+
+/// 彩色渐晕背景：给毛玻璃材质提供透出来的颜色层次
+struct GlassBackdrop: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let strength = scheme == .dark ? 0.55 : 1.0
+        return ZStack {
+            Pal.bg
+            GeometryReader { geo in
+                ZStack {
+                    blob(Pal.brand.opacity(0.22 * strength),
+                         size: geo.size.width * 1.05,
+                         center: CGPoint(x: -geo.size.width * 0.18, y: -geo.size.height * 0.05))
+                    blob(Pal.gold.opacity(0.18 * strength),
+                         size: geo.size.width * 0.95,
+                         center: CGPoint(x: geo.size.width * 1.05, y: geo.size.height * 0.28))
+                    blob(Pal.danger.opacity(0.13 * strength),
+                         size: geo.size.width * 0.9,
+                         center: CGPoint(x: geo.size.width * 0.42, y: geo.size.height * 1.08))
+                }
+                .blur(70)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    private func blob(_ color: Color, size: CGFloat, center: CGPoint) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .position(center)
+    }
+}
+
+/// 玻璃描边：上亮下暗的高光，模拟玻璃厚度
+private struct GlassStroke: View {
+    var cornerRadius: CGFloat
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0.06), .white.opacity(0.22)],
+                               startPoint: .topLeading,
+                               endPoint: .bottomTrailing)
+            )
+            .blendMode(.plusLighter)
+            .allowsHitTesting(false)
+    }
+}
+
 // MARK: - 基础容器
 
 struct CardBox<Content: View>: View {
@@ -103,6 +154,9 @@ struct CardBox<Content: View>: View {
     var fill: Color
     var stroke: Color
     let content: Content
+
+    /// fill 为默认值时走液态玻璃，传入自定义色时保持原实底（用于金色提示等特殊卡）
+    private var useGlass: Bool { fill == Pal.card }
 
     init(padding: CGFloat = 16,
          fill: Color = Pal.card,
@@ -115,6 +169,31 @@ struct CardBox<Content: View>: View {
     }
 
     var body: some View {
+        if useGlass {
+            glassBody
+        } else {
+            solidBody
+        }
+    }
+
+    private var glassBody: some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(GlassStroke(cornerRadius: 24))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+            )
+            .shadow(color: .black.opacity(0.09), radius: 18, x: 0, y: 8)
+    }
+
+    private var solidBody: some View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -174,11 +253,8 @@ struct BigButton: View {
             .frame(minHeight: 54)
             .foregroundStyle(foreground)
             .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(style == .ghost ? Pal.line : Color.clear, lineWidth: 1)
-            )
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(buttonStroke)
         }
         .buttonStyle(.plain)
     }
@@ -191,11 +267,34 @@ struct BigButton: View {
         }
     }
 
-    private var background: Color {
+    @ViewBuilder
+    private var background: some View {
         switch style {
-        case .solid: return Pal.brand
-        case .ghost: return Pal.card2
-        case .danger: return Pal.dangerSoft
+        case .solid:
+            // 主按钮：品牌色玻璃渐变 + 顶部高光
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(LinearGradient(colors: [Pal.brand.opacity(0.88), Pal.brand],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .overlay(
+                    LinearGradient(colors: [.white.opacity(0.32), .clear, .white.opacity(0.10)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .allowsHitTesting(false)
+                )
+                .shadow(color: Pal.brand.opacity(0.35), radius: 14, x: 0, y: 6)
+        case .ghost:
+            // 次按钮：纯玻璃
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.regularMaterial)
+        case .danger:
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Pal.dangerSoft)
+        }
+    }
+
+    @ViewBuilder
+    private var buttonStroke: some View {
+        if style == .ghost {
+            GlassStroke(cornerRadius: 20)
         }
     }
 }
@@ -265,11 +364,11 @@ struct StatCell: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .background(Pal.card)
-        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .stroke(Pal.line, lineWidth: 1)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.ultraThinMaterial)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(GlassStroke(cornerRadius: 18))
     }
 }
