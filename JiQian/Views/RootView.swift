@@ -3,8 +3,6 @@ import SwiftData
 
 struct RootView: View {
     @State private var tab: Int = 0
-    /// 切页延伸的原点：点哪颗按钮，页面就从哪里向四周铺开
-    @State private var anchor: UnitPoint = UnitPoint(x: 0.5, y: 0.94)
 
     var body: some View {
         ZStack {
@@ -14,13 +12,10 @@ struct RootView: View {
             page(SummaryView(), index: 1)
             page(SettingsView(), index: 2)
         }
-        // 页面切换：快速缓出，从点击处延伸铺满
-        .animation(.easeOut(duration: 0.24), value: tab)
+        // 页面切换：轻柔淡入上浮，快速到位、不晃眼
+        .animation(.easeOut(duration: 0.26), value: tab)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            GlassTabBar(selection: $tab) { tag in
-                // 三颗按钮对应的横向位置，延伸原点贴到按钮处
-                anchor = UnitPoint(x: [0.17, 0.5, 0.83][tag], y: 0.94)
-            }
+            GlassTabBar(selection: $tab)
         }
         .tint(Pal.brand)
         .onOpenURL { url in
@@ -34,8 +29,8 @@ struct RootView: View {
         let active = tab == index
         view
             .opacity(active ? 1 : 0)
-            // 未激活页向延伸原点收拢（旧页被"吸回"点击处），激活页从原点铺满全屏
-            .scaleEffect(active ? 1 : 0.74, anchor: anchor)
+            // 只做轻微上浮（14pt），无缩放，观感稳定不眼花
+            .offset(y: active ? 0 : 14)
             .allowsHitTesting(active)
     }
 }
@@ -86,8 +81,6 @@ private struct GlassPressStyle: ButtonStyle {
 
 struct GlassTabBar: View {
     @Binding var selection: Int
-    /// 通知根视图点击位置，用于切页延伸原点
-    var onPick: ((Int) -> Void)?
     @Namespace private var ns
 
     var body: some View {
@@ -106,8 +99,7 @@ struct GlassTabBar: View {
     private func item(icon: String, title: String, tag: Int) -> some View {
         let selected = selection == tag
         return Button {
-            // 先记录延伸原点，再立即切页
-            onPick?(tag)
+            // 立即切页，不等动画
             selection = tag
         } label: {
             VStack(spacing: 2) {
