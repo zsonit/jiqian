@@ -85,14 +85,23 @@ enum Haptic {
 /// 用 UIKit 直接弹系统分享面板，兼容性最好
 @MainActor
 enum Sharer {
-    static func share(_ items: [Any]) {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let root = scene.keyWindow?.rootViewController else { return }
-        var top = root
-        while let presented = top.presentedViewController { top = presented }
+    @discardableResult
+    static func share(_ items: [Any]) -> Bool {
+        guard let top = topVC() else { return false }
         let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
         vc.popoverPresentationController?.sourceView = top.view
         top.present(vc, animated: true)
+        return true
+    }
+
+    /// 稳健地找当前最顶层 VC：遍历所有前台 scene 的 keyWindow
+    private static func topVC() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let window = scenes.flatMap(\.windows).first(where: { $0.isKeyWindow })
+            ?? scenes.first?.windows.first
+        guard var top = window?.rootViewController else { return nil }
+        while let presented = top.presentedViewController { top = presented }
+        return top
     }
 }
 

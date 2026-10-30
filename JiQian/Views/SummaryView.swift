@@ -91,7 +91,7 @@ struct SummaryView: View {
                         }
                     }
 
-                    Text("日历可以翻到任意月份查看历史记录；分享图片在微信里最稳。摘要只写事实：时间、次数、时长、间隔。")
+                    Text("小提示：微信不接收纯文本，点「分享文字」后文字已自动复制，去微信聊天框长按粘贴即可；给家人推荐用「分享给家人（图片）」，微信/QQ/短信都最稳。")
                         .font(.system(size: 13))
                         .foregroundStyle(Pal.ink2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -131,6 +131,8 @@ struct SummaryView: View {
     private func shareAsText() {
         guard !text.isEmpty else { showEmptyAlert = true; return }
         Haptic.tap()
+        // 兜底：先复制，即使目标 App 不收纯文本，聊天框长按粘贴也能用
+        UIPasteboard.general.string = text
         Sharer.share([text])
     }
 
