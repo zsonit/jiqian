@@ -11,14 +11,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Download APK artifact
+      - name: Download IPA artifact
         run: |
-          gh api repos/${{ github.repository }}/actions/runs/41010868035/artifacts > apk.json
-          URL=$(python3 -c "import json;print(json.load(open('apk.json'))['artifacts'][0]['archive_download_url'])")
-          gh api "$URL" > apk.zip
-          unzip -o apk.zip
-          mv app-debug.apk JiQian-android.apk || true
+          gh api repos/${{ github.repository }}/actions/runs/41013445948/artifacts > art.json
+          URL=$(python3 -c "import json;print(json.load(open('art.json'))['artifacts'][0]['archive_download_url'])")
+          gh api "$URL" > art.zip
+          unzip -o art.zip
 
       - name: Upload assets to release v4.0
         run: |
-          gh release upload v4.0 JiQian-android.apk --clobber -R ${{ github.repository }}
+          gh release upload v4.1 JiQian-unsigned.ipa --clobber -R ${{ github.repository }}
