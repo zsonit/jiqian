@@ -30,7 +30,41 @@ struct RootView: View {
     }
 }
 
-// MARK: - 悬浮液态玻璃底部栏
+// MARK: - 真·液态玻璃底部栏（iOS 26 glassEffect，旧系统自动降级）
+
+/// iOS 26：苹果系统级 Liquid Glass（真实折射 + 高光随手势移动 + 触摸弹性）
+/// iOS 26 以下：毛玻璃 + 描边降级
+private struct LiquidGlass: ViewModifier {
+    var interactive: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(interactive ? Glass.regular.interactive() : Glass.regular,
+                                 in: .capsule)
+        } else {
+            content
+                .background(Capsule(style: .continuous).fill(.ultraThinMaterial))
+                .clipShape(Capsule(style: .continuous))
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.10)],
+                                                     startPoint: .top, endPoint: .bottom),
+                                      lineWidth: 0.9)
+                }
+                .shadow(color: .black.opacity(0.14), radius: 16, x: 0, y: 6)
+        }
+    }
+}
+
+/// 点按时的玻璃弹性：按下轻微压缩，松手回弹
+private struct GlassPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.88 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.55),
+                       value: configuration.isPressed)
+    }
+}
 
 struct GlassTabBar: View {
     @Binding var selection: Int
@@ -43,26 +77,7 @@ struct GlassTabBar: View {
             item(icon: "gearshape", title: "设置", tag: 2)
         }
         .padding(6)
-        .background {
-            // 毛玻璃胶囊容器
-            Capsule(style: .continuous).fill(.ultraThinMaterial)
-        }
-        .clipShape(Capsule(style: .continuous))
-        .overlay {
-            // 玻璃厚度高光：上亮下暗的对角渐变（滴水感）
-            Capsule(style: .continuous)
-                .fill(LinearGradient(colors: [.white.opacity(0.42), .white.opacity(0.05), .white.opacity(0.20)],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-                .blendMode(.plusLighter)
-                .allowsHitTesting(false)
-        }
-        .overlay {
-            Capsule(style: .continuous)
-                .strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.10)],
-                                             startPoint: .top, endPoint: .bottom),
-                              lineWidth: 0.9)
-        }
-        .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 8)
+        .modifier(LiquidGlass(interactive: true))
         .padding(.horizontal, 20)
         .padding(.bottom, 4)
     }
@@ -71,10 +86,10 @@ struct GlassTabBar: View {
         let selected = selection == tag
         return Button {
             guard selection != tag else { return }
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+            // 果冻感的液态滑动：弹性略大，让选中块像液体一样荡过去
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.62)) {
                 selection = tag
             }
-            Haptic.soft()
         } label: {
             VStack(spacing: 2) {
                 Image(systemName: icon)
@@ -88,22 +103,15 @@ struct GlassTabBar: View {
             .padding(.vertical, 9)
             .background {
                 if selected {
-                    // 选中块：品牌色玻璃渐变 + 顶部水滴高光
+                    // 选中指示块：品牌色玻璃渐变，液体般滑到新位置
                     Capsule(style: .continuous)
                         .fill(LinearGradient(colors: [Pal.brand.opacity(0.92), Pal.brand],
                                              startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .overlay {
-                            Capsule(style: .continuous)
-                                .fill(LinearGradient(colors: [.white.opacity(0.38), .white.opacity(0.02), .clear],
-                                                     startPoint: .top, endPoint: .bottom))
-                                .blendMode(.plusLighter)
-                                .allowsHitTesting(false)
-                        }
-                        .shadow(color: Pal.brand.opacity(0.35), radius: 10, x: 0, y: 4)
+                        .shadow(color: Pal.brand.opacity(0.32), radius: 9, x: 0, y: 4)
                         .matchedGeometryEffect(id: "tabSel", in: ns)
                 }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GlassPressStyle())
     }
 }
