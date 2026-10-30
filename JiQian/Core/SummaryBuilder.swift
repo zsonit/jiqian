@@ -60,11 +60,10 @@ enum SummaryBuilder {
         lines.append("【胎动】")
         let rangedSessions = sessions.filter { ($0.endedAt ?? $0.startedAt) >= cutoff }
         var totalKicks = 0
-        var wroteAny = false
+        var detailLines: [String] = []
         for session in rangedSessions {
             let items = kicks.filter { $0.sessionID == session.id && $0.occurredAt >= cutoff }
             guard !items.isEmpty else { continue }
-            wroteAny = true
             totalKicks += items.count
             let start = items.first?.occurredAt ?? session.startedAt
             let end = items.last?.occurredAt ?? start
@@ -72,10 +71,14 @@ enum SummaryBuilder {
             if session.lessThanUsualRaw == 1 {
                 line += "（自觉明显少于平时）"
             }
-            lines.append(line)
+            detailLines.append(line)
         }
-        if !wroteAny {
+        if detailLines.isEmpty {
             lines.append("该时段无记录。")
+        } else {
+            // 与【宫缩】一致：先给一行合计，再列各轮明细
+            lines.append("- 共 \(totalKicks) 次。")
+            lines.append(contentsOf: detailLines)
         }
         lines.append("")
 
@@ -136,11 +139,10 @@ enum SummaryBuilder {
         lines.append("【胎动】")
         let daySessions = sessions.filter { $0.startedAt < end && ($0.endedAt ?? $0.startedAt) > start }
         var totalKicks = 0
-        var wroteAny = false
+        var detailLines: [String] = []
         for session in daySessions {
             let items = kicks.filter { $0.sessionID == session.id && $0.occurredAt >= start && $0.occurredAt < end }
             guard !items.isEmpty else { continue }
-            wroteAny = true
             totalKicks += items.count
             let first = items.first!.occurredAt
             let last = items.last!.occurredAt
@@ -148,10 +150,14 @@ enum SummaryBuilder {
             if session.lessThanUsualRaw == 1 {
                 line += "（自觉明显少于平时）"
             }
-            lines.append(line)
+            detailLines.append(line)
         }
-        if !wroteAny {
+        if detailLines.isEmpty {
             lines.append("该日无记录。")
+        } else {
+            // 与【宫缩】一致：先给一行合计，再列各轮明细
+            lines.append("- 共 \(totalKicks) 次。")
+            lines.append(contentsOf: detailLines)
         }
         lines.append("")
 

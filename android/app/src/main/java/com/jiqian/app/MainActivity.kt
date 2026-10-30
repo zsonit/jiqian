@@ -498,6 +498,6 @@ fun SettingsScreen() {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.3 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v4.4 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
     }
 }
