@@ -37,17 +37,11 @@ struct ActionsView: View {
     ]
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("快捷指令")
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundStyle(Pal.ink)
-                        Text("把动作做成点一下就执行的快捷指令，放桌面、放控制中心，随点随记。")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Pal.ink2)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("把动作做成点一下就执行的快捷指令，放桌面、放控制中心，随点随记。")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Pal.ink2)
 
                     VStack(alignment: .leading, spacing: 8) {
                         SectionTitle(text: "推荐创建这两个")
@@ -152,7 +146,6 @@ struct ActionsView: View {
             .background(Pal.bg.ignoresSafeArea())
             .navigationTitle("快捷指令")
             .navigationBarTitleDisplayMode(.inline)
-        }
     }
 
     private func entry(icon: String, title: String, detail: String) -> some View {
