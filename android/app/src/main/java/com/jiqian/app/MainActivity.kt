@@ -314,11 +314,17 @@ fun ContractionScreen() {
 
         Spacer(Modifier.height(16.dp))
         Text("历史（最近 20 条）", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink)
-        list.take(20).forEach { (s, e) ->
+        list.take(20).forEachIndexed { idx, (s, e) ->
             val dur = (e - s) / 1000
+            // 与 iOS 一致：显示与上一次收缩的间隔
+            val gap = if (idx < list.size - 1) (s - list[idx + 1].first) / 1000 else 0L
             Column(Modifier.padding(top = 8.dp)) {
                 Text(fmtFull(s), fontSize = 12.5.sp, color = Ink)
-                Text("持续 %02d分%02d秒".format(dur / 60, dur % 60), fontSize = 12.5.sp, color = Ink2)
+                Text(
+                    "持续 %02d:%02d".format(dur / 60, dur % 60) +
+                        if (gap > 0) " · 间隔 %02d:%02d".format(gap / 60, gap % 60) else "",
+                    fontSize = 12.5.sp, color = Ink2
+                )
             }
         }
         if (list.isEmpty()) Text("暂无宫缩记录", fontSize = 12.5.sp, color = Ink2, modifier = Modifier.padding(top = 6.dp))
@@ -475,6 +481,6 @@ fun SettingsScreen() {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.0 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v4.1 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
     }
 }
