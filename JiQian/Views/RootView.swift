@@ -61,7 +61,6 @@ private struct LiquidGlass: ViewModifier {
                                       lineWidth: 0.9)
                 }
                 .shadow(color: .black.opacity(0.14), radius: 16, x: 0, y: 6)
-        }
     }
 }
 
