@@ -12,8 +12,8 @@ struct RootView: View {
             page(SummaryView(), index: 1)
             page(SettingsView(), index: 2)
         }
-        // 页面切换：轻量 Q 弹过渡（只动透明度+微缩放，避免卡顿）
-        .animation(.spring(response: 0.42, dampingFraction: 0.75), value: tab)
+        // 页面切换：丝滑弹簧（临界阻尼附近，无生硬跳变）
+        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: tab)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GlassTabBar(selection: $tab)
         }
@@ -29,8 +29,8 @@ struct RootView: View {
         let active = tab == index
         view
             .opacity(active ? 1 : 0)
-            .scaleEffect(active ? 1 : 0.97)
-            .offset(y: active ? 0 : 8)
+            .scaleEffect(active ? 1 : 0.985)
+            .offset(y: active ? 0 : 5)
             .allowsHitTesting(active)
     }
 }
@@ -69,12 +69,12 @@ private struct LiquidGlass: ViewModifier {
     }
 }
 
-/// 点按时的玻璃弹性：按下压缩，松手 Q 弹回弹
+/// 点按时的玻璃弹性：按下轻压，松手顺滑回弹
 private struct GlassPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.86 : 1.0)
-            .animation(.spring(response: 0.32, dampingFraction: 0.5),
+            .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75),
                        value: configuration.isPressed)
     }
 }
@@ -89,7 +89,7 @@ struct GlassTabBar: View {
             item(icon: "doc.text", title: "摘要", tag: 1)
             item(icon: "gearshape", title: "设置", tag: 2)
         }
-        .animation(.spring(response: 0.42, dampingFraction: 0.55), value: selection)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: selection)
         .padding(6)
         .modifier(LiquidGlass(interactive: false))
         .padding(.horizontal, 20)
