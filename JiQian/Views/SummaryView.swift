@@ -84,7 +84,6 @@ struct SummaryView: View {
                         BigButton(title: copied ? "已复制" : "复制文字", style: .ghost) {
                             UIPasteboard.general.string = text
                             copied = true
-                            Haptic.success()
                         }
                         BigButton(title: "分享文字", style: .ghost) {
                             shareAsText()
@@ -130,7 +129,6 @@ struct SummaryView: View {
 
     private func shareAsText() {
         guard !text.isEmpty else { showEmptyAlert = true; return }
-        Haptic.tap()
         // 兜底：先复制，即使目标 App 不收纯文本，聊天框长按粘贴也能用
         UIPasteboard.general.string = text
         Sharer.share([text])
@@ -138,7 +136,6 @@ struct SummaryView: View {
 
     private func shareAsImage() {
         guard !text.isEmpty else { showEmptyAlert = true; return }
-        Haptic.tap()
         if let image = renderSummaryImage() {
             Sharer.share([image])
         } else {

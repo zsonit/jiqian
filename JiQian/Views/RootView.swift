@@ -5,20 +5,13 @@ struct RootView: View {
     @State private var tab: Int = 0
 
     var body: some View {
-        TabView(selection: $tab) {
-            HomeView()
-                .toolbar(.hidden, for: .tabBar)
-                .tabItem { Label("首页", systemImage: "house") }
-                .tag(0)
-            SummaryView()
-                .toolbar(.hidden, for: .tabBar)
-                .tabItem { Label("摘要", systemImage: "doc.text") }
-                .tag(1)
-            SettingsView()
-                .toolbar(.hidden, for: .tabBar)
-                .tabItem { Label("设置", systemImage: "gearshape") }
-                .tag(2)
+        ZStack {
+            page(HomeView(), index: 0)
+            page(SummaryView(), index: 1)
+            page(SettingsView(), index: 2)
         }
+        // 页面切换：Q 弹弹簧过渡（新页从 94% 放大弹出，旧页缩小淡出）
+        .animation(.spring(response: 0.45, dampingFraction: 0.7), value: tab)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GlassTabBar(selection: $tab)
         }
@@ -27,6 +20,16 @@ struct RootView: View {
             if url.host == "summary" { tab = 1 }
             if url.host == "kick" { tab = 0 }
         }
+    }
+
+    @ViewBuilder
+    private func page(_ view: some View, index: Int) -> some View {
+        let active = tab == index
+        view
+            .opacity(active ? 1 : 0)
+            .scaleEffect(active ? 1 : 0.94)
+            .offset(y: active ? 0 : 16)
+            .allowsHitTesting(active)
     }
 }
 
@@ -64,12 +67,12 @@ private struct LiquidGlass: ViewModifier {
     }
 }
 
-/// 点按时的玻璃弹性：按下轻微压缩，松手回弹
+/// 点按时的玻璃弹性：按下压缩，松手 Q 弹回弹
 private struct GlassPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.88 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.55),
+            .scaleEffect(configuration.isPressed ? 0.86 : 1.0)
+            .animation(.spring(response: 0.32, dampingFraction: 0.5),
                        value: configuration.isPressed)
     }
 }
@@ -84,7 +87,7 @@ struct GlassTabBar: View {
             item(icon: "doc.text", title: "摘要", tag: 1)
             item(icon: "gearshape", title: "设置", tag: 2)
         }
-        .animation(.spring(response: 0.32, dampingFraction: 0.72), value: selection)
+        .animation(.spring(response: 0.42, dampingFraction: 0.55), value: selection)
         .padding(6)
         .modifier(LiquidGlass(interactive: false))
         .padding(.horizontal, 20)
