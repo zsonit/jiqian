@@ -1,0 +1,31 @@
+name: publish-release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download IPA artifact
+        run: |
+          gh api repos/${{ github.repository }}/actions/runs/41009987896/artifacts > ipa.json
+          URL=$(python3 -c "import json;print(json.load(open('ipa.json'))['artifacts'][0]['archive_download_url'])")
+          gh api "$URL" > ipa.zip
+          unzip -o ipa.zip
+
+      - name: Download APK artifact
+        run: |
+          gh api repos/${{ github.repository }}/actions/runs/41010868035/artifacts > apk.json
+          URL=$(python3 -c "import json;print(json.load(open('apk.json'))['artifacts'][0]['archive_download_url'])")
+          gh api "$URL" > apk.zip
+          unzip -o apk.zip
+          mv app-debug.apk JiQian-android.apk || true
+
+      - name: Upload assets to release v4.0
+        run: |
+          gh release upload v4.0 JiQian-unsigned.ipa JiQian-android.apk --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
