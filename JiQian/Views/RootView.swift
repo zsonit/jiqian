@@ -38,11 +38,20 @@ private struct LiquidGlass: ViewModifier {
     var interactive: Bool
 
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             content.glassEffect(interactive ? Glass.regular.interactive() : Glass.regular,
                                  in: .capsule)
         } else {
-            content
+            fallback(content)
+        }
+        #else
+        fallback(content)
+        #endif
+    }
+
+    private func fallback(_ content: Content) -> some View {
+        content
                 .background(Capsule(style: .continuous).fill(.ultraThinMaterial))
                 .clipShape(Capsule(style: .continuous))
                 .overlay {

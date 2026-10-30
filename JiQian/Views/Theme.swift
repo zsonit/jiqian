@@ -132,13 +132,13 @@ struct GlassBackdrop: View {
     }
 }
 
-/// 玻璃描边：上亮下暗的高光，模拟玻璃厚度
+/// 玻璃描边：上亮下暗的高光，模拟玻璃厚度（轮廓清晰化）
 private struct GlassStroke: View {
     var cornerRadius: CGFloat
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(
-                LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0.06), .white.opacity(0.22)],
+                LinearGradient(colors: [.white.opacity(0.62), .white.opacity(0.10), .white.opacity(0.30)],
                                startPoint: .topLeading,
                                endPoint: .bottomTrailing)
             )
@@ -188,7 +188,9 @@ struct CardBox<Content: View>: View {
             .overlay(GlassStroke(cornerRadius: 24))
             .overlay(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(0.50), .white.opacity(0.12)],
+                                                 startPoint: .top, endPoint: .bottom),
+                                  lineWidth: 1.1)
             )
             .shadow(color: .black.opacity(0.09), radius: 18, x: 0, y: 8)
     }
@@ -370,5 +372,9 @@ struct StatCell: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(GlassStroke(cornerRadius: 18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.28), lineWidth: 1)
+        )
     }
 }
