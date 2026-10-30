@@ -76,8 +76,6 @@ enum SummaryBuilder {
         }
         if !wroteAny {
             lines.append("该时段无记录。")
-        } else {
-            lines.append("合计 \(totalKicks) 次。")
         }
         lines.append("")
 
@@ -154,8 +152,6 @@ enum SummaryBuilder {
         }
         if !wroteAny {
             lines.append("该日无记录。")
-        } else {
-            lines.append("合计 \(totalKicks) 次。")
         }
         lines.append("")
 
@@ -180,5 +176,22 @@ enum SummaryBuilder {
         lines.append("")
         lines.append("（本记录为患者自述，由「胎动」整理，不构成诊断。）")
         return lines.joined(separator: "\n")
+    }
+
+    /// 某个自然日的胎动合计（供页面右上角大字显示）
+    static func kicksTotal(day: Date) -> Int {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: day)
+        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return 0 }
+        let context = JiQianStore.context
+        let kicks = (try? context.fetch(FetchDescriptor<KickEvent>(sortBy: [SortDescriptor(\.occurredAt)]))) ?? []
+        return kicks.filter { $0.occurredAt >= start && $0.occurredAt < end }.count
+    }
+
+    /// 全部历史胎动合计
+    static func kicksTotalAll() -> Int {
+        let context = JiQianStore.context
+        let kicks = (try? context.fetch(FetchDescriptor<KickEvent>())) ?? []
+        return kicks.count
     }
 }
