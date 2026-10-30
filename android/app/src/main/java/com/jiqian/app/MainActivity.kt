@@ -333,6 +333,17 @@ fun ContractionScreen() {
 
 // ---------- 摘要 ----------
 @Composable
+fun TotalBlock(label: String, value: Int, tint: Color) {
+    Column(horizontalAlignment = Alignment.End) {
+        Text(label, fontSize = 10.sp, color = Ink2)
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text("$value", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = tint)
+            Text("次", fontSize = 10.sp, color = Ink2, modifier = Modifier.padding(start = 2.dp, bottom = 3.dp))
+        }
+    }
+}
+
+@Composable
 fun SummaryScreen() {
     val ctx = LocalContext.current
     var dayOffset by remember { mutableStateOf(0) }   // 0=今天，1=昨天…
@@ -361,7 +372,13 @@ fun SummaryScreen() {
     val text = sb.toString()
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
-        Text("摘要", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("摘要", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
+            // 右上角合计：胎动 / 宫缩
+            TotalBlock("胎动", dayKicks.size, Brand)
+            Box(Modifier.padding(horizontal = 10.dp).size(width = 1.dp, height = 30.dp).background(Line))
+            TotalBlock("宫缩", dayCtns.size, Color(0xFFC08089))
+        }
 
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -481,6 +498,6 @@ fun SettingsScreen() {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.1 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v4.2 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
     }
 }
