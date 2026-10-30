@@ -191,13 +191,15 @@ struct ContractionView: View {
                         ForEach(Array(finished.reversed().prefix(10)), id: \.id) { event in
                             HStack(spacing: 10) {
                                 Circle().fill(Pal.gold).frame(width: 7, height: 7)
-                                Text(Fmt.hhmm(event.startedAt))
-                                    .font(.system(size: 13))
+                                Text(Fmt.mdHms(event.startedAt))
+                                    .font(.system(size: 12.5))
                                     .monospacedDigit()
                                     .foregroundStyle(Pal.ink2)
-                                    .frame(width: 52, alignment: .leading)
+                                    .frame(width: 172, alignment: .leading)
                                 Text("持续 \(Fmt.clock(event.duration))" + (event.gap > 0 ? " · 间隔 \(Fmt.clock(event.gap))" : "") + (event.isSuspect ? " · 待确认" : ""))
-                                    .font(.system(size: 13))
+                                    .font(.system(size: 12.5))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
                                     .foregroundStyle(Pal.ink)
                                 Spacer()
                                 Button {
