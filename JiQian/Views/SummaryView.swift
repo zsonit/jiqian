@@ -17,6 +17,38 @@ struct SummaryView: View {
     @State private var copied = false
     @State private var showEmptyAlert = false
 
+    /// RootView 里三个页面是常驻的，onAppear 只会在第一次出现时触发，
+    /// 所以这里用 @Query 盯着原始记录，数据一变就重算摘要。
+    @Query(sort: \KickEvent.occurredAt, order: .reverse) private var kickEvents: [KickEvent]
+    @Query(sort: \KickSession.startedAt, order: .reverse) private var kickSessions: [KickSession]
+    @Query(sort: \ContractionEvent.startedAt, order: .reverse) private var contractionEvents: [ContractionEvent]
+
+    @AppStorage(PrefKey.edd) private var eddStamp: Double = 0
+    @AppStorage(PrefKey.risks) private var risksRaw: String = ""
+
+    /// 记录指纹：新增 / 删除 / 结束一轮 / 修改间隔都会变，用来驱动摘要刷新
+    private var dataStamp: Int {
+        var hasher = Hasher()
+        for event in kickEvents {
+            hasher.combine(event.id)
+            hasher.combine(event.occurredAt)
+            hasher.combine(event.sessionID)
+        }
+        for session in kickSessions {
+            hasher.combine(session.id)
+            hasher.combine(session.startedAt)
+            hasher.combine(session.endedAt)
+            hasher.combine(session.lessThanUsualRaw)
+        }
+        for event in contractionEvents {
+            hasher.combine(event.id)
+            hasher.combine(event.startedAt)
+            hasher.combine(event.endedAt)
+            hasher.combine(event.gap)
+        }
+        return hasher.finalize()
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -108,6 +140,13 @@ struct SummaryView: View {
             .navigationTitle("就诊摘要")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { reload() }
+            // 记录一变就同步：无论此刻摘要页是否在屏幕上
+            .onChange(of: dataStamp) { _, _ in
+                copied = false
+                reload()
+            }
+            .onChange(of: eddStamp) { _, _ in reload() }
+            .onChange(of: risksRaw) { _, _ in reload() }
             .onChange(of: scope) { _, _ in
                 copied = false
                 reload()
