@@ -106,17 +106,28 @@ struct GlassTabBar: View {
                 Text(title)
                     .font(.system(size: 10.5, weight: .medium))
             }
-            .foregroundStyle(selected ? Color.white : Pal.ink2)
+            .foregroundStyle(selected ? Pal.brand : Pal.ink2)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
             .background {
                 if selected {
-                    // 选中指示块：品牌色玻璃渐变，液体般滑到新位置
-                    Capsule(style: .continuous)
-                        .fill(LinearGradient(colors: [Pal.brand.opacity(0.92), Pal.brand],
-                                             startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .shadow(color: Pal.brand.opacity(0.32), radius: 9, x: 0, y: 4)
-                        .matchedGeometryEffect(id: "tabSel", in: ns)
+                    // 选中指示块：透明液态玻璃（淡品牌色透底 + 高光 + 白描边）
+                    ZStack {
+                        Capsule(style: .continuous)
+                            .fill(LinearGradient(colors: [Pal.brand.opacity(0.28), Pal.brand.opacity(0.14)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+                        Capsule(style: .continuous)
+                            .fill(LinearGradient(colors: [.white.opacity(0.50), .white.opacity(0.06), .white.opacity(0.22)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .blendMode(.plusLighter)
+                            .allowsHitTesting(false)
+                        Capsule(style: .continuous)
+                            .strokeBorder(LinearGradient(colors: [.white.opacity(0.70), .white.opacity(0.16)],
+                                                         startPoint: .top, endPoint: .bottom),
+                                          lineWidth: 0.9)
+                    }
+                    .shadow(color: Pal.brand.opacity(0.16), radius: 8, x: 0, y: 3)
+                    .matchedGeometryEffect(id: "tabSel", in: ns)
                 }
             }
         }
