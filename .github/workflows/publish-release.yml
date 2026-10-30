@@ -21,4 +21,4 @@ jobs:
 
       - name: Upload assets to release v4.0
         run: |
-          gh release upload v4.0 JiQian-android.apk --clobber
+          gh release upload v4.0 JiQian-android.apk --clobber -R ${{ github.repository }}
