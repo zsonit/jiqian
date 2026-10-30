@@ -2,20 +2,20 @@ import SwiftUI
 import UIKit
 import AudioToolbox
 
-/// 与网页版一致的视觉语言：暖白纸感 + 深青主色，深色模式自动切换。
+/// 粉色系视觉语言：暖粉纸感 + 玫瑰粉主色，深色模式自动切换。
 enum Pal {
-    static let bg = Color.dyn(0xF6F4EF, 0x121614)
-    static let bg2 = Color.dyn(0xEFECE4, 0x171D1A)
-    static let card = Color.dyn(0xFFFFFF, 0x1B2220)
-    static let card2 = Color.dyn(0xFBFAF6, 0x202925)
-    static let ink = Color.dyn(0x16232B, 0xEEF3F0)
-    static let ink2 = Color.dyn(0x5F6D74, 0xA9B6B1)
-    static let ink3 = Color.dyn(0x8B979C, 0x7D8B86)
-    static let line = Color.dyn(0xE5E1D7, 0x2B3531)
-    static let brand = Color.dyn(0x0F5A50, 0x5CC0AE)
-    static let brandSoft = Color.dyn(0xE4EFEC, 0x1D3330)
-    static let gold = Color.dyn(0xA8772C, 0xD3A45F)
-    static let goldSoft = Color.dyn(0xFBF2E2, 0x2A2418)
+    static let bg = Color.dyn(0xFBF5F6, 0x1A1416)
+    static let bg2 = Color.dyn(0xF5ECEE, 0x201A1C)
+    static let card = Color.dyn(0xFFFFFF, 0x241C1F)
+    static let card2 = Color.dyn(0xFDF9FA, 0x2A2225)
+    static let ink = Color.dyn(0x2B2126, 0xF7EEF2)
+    static let ink2 = Color.dyn(0x8A7078, 0xC5AAB5)
+    static let ink3 = Color.dyn(0xB098A0, 0x9A838C)
+    static let line = Color.dyn(0xF0E2E7, 0x3A2E33)
+    static let brand = Color.dyn(0xD9548C, 0xF19CC2)
+    static let brandSoft = Color.dyn(0xFBECF2, 0x3A1F2C)
+    static let gold = Color.dyn(0xC08089, 0xE8AEB4)
+    static let goldSoft = Color.dyn(0xFBEFF1, 0x2E2226)
     static let danger = Color.dyn(0xB2362D, 0xE0796F)
     static let dangerSoft = Color.dyn(0xFBECEB, 0x331E1C)
 }

@@ -160,14 +160,14 @@ struct SummaryView: View {
                     Text("\(totalKicks)")
                         .font(.system(size: 34, weight: .bold))
                         .monospacedDigit()
-                        .foregroundStyle(Color(hex: 0x2A9D8F))
+                        .foregroundStyle(Color(hex: 0xD9548C))
                     Text("次")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(Color(hex: 0x5F6D74))
                 }
             }
             Rectangle()
-                .fill(Color(hex: 0x2A9D8F))
+                .fill(Color(hex: 0xD9548C))
                 .frame(width: 44, height: 3)
             Text(text)
                 .font(.system(size: 14.5))
