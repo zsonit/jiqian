@@ -433,6 +433,9 @@ fun SettingsScreen() {
     var sound by remember { mutableStateOf(Store.soundOn(ctx)) }
     var vol by remember { mutableStateOf(Store.volume(ctx)) }
     var haptic by remember { mutableStateOf(Store.hapticOn(ctx)) }
+    // 清空记录的两道确认：1=第一次提醒，2=最后确认
+    var confirmStep by remember { mutableStateOf(0) }
+    var wipeKind by remember { mutableStateOf("kicks") }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("设置", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
@@ -486,11 +489,11 @@ fun SettingsScreen() {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
-                        onClick = { Store.clearKicks(ctx); Toast.makeText(ctx, "胎动记录已清空", Toast.LENGTH_SHORT).show() },
+                        onClick = { wipeKind = "kicks"; confirmStep = 1 },
                         shape = RoundedCornerShape(50)
                     ) { Text("清空胎动", color = Danger) }
                     OutlinedButton(
-                        onClick = { Store.clearContractions(ctx); Toast.makeText(ctx, "宫缩记录已清空", Toast.LENGTH_SHORT).show() },
+                        onClick = { wipeKind = "ctns"; confirmStep = 1 },
                         shape = RoundedCornerShape(50)
                     ) { Text("清空宫缩", color = Danger) }
                 }
@@ -498,6 +501,41 @@ fun SettingsScreen() {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.4 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v4.5 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
+
+        if (confirmStep > 0) {
+            val name = if (wipeKind == "kicks") "胎动" else "宫缩"
+            AlertDialog(
+                onDismissRequest = { confirmStep = 0 },
+                title = { Text(if (confirmStep == 1) "清空${name}记录？" else "最后确认一次") },
+                text = {
+                    Text(
+                        if (confirmStep == 1)
+                            "本机的${name}记录将被删除，无法恢复。"
+                        else
+                            "确定要彻底清空${name}记录吗？删除后无法找回。"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (confirmStep == 1) {
+                            confirmStep = 2
+                        } else {
+                            if (wipeKind == "kicks") {
+                                Store.clearKicks(ctx)
+                                Toast.makeText(ctx, "胎动记录已清空", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Store.clearContractions(ctx)
+                                Toast.makeText(ctx, "宫缩记录已清空", Toast.LENGTH_SHORT).show()
+                            }
+                            confirmStep = 0
+                        }
+                    }) { Text(if (confirmStep == 1) "继续" else "彻底清空", color = Danger) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmStep = 0 }) { Text("取消", color = Ink2) }
+                }
+            )
+        }
     }
 }

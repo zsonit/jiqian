@@ -18,6 +18,7 @@ struct SettingsView: View {
     @Query private var contractions: [ContractionEvent]
 
     @State private var showWipeConfirm = false
+    @State private var showWipeConfirm2 = false
 
     private var eddBinding: Binding<Date> {
         Binding(
@@ -143,11 +144,18 @@ struct SettingsView: View {
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
+            // 两道确认：先提醒会删什么，再给一次无法挽回的最后确认
             .confirmationDialog("清空全部记录？", isPresented: $showWipeConfirm, titleVisibility: .visible) {
-                Button("确认清空", role: .destructive) { wipe() }
+                Button("继续", role: .destructive) { showWipeConfirm2 = true }
                 Button("取消", role: .cancel) {}
             } message: {
                 Text("本机的胎动与宫缩记录都会被删除，无法恢复。")
+            }
+            .confirmationDialog("最后确认一次", isPresented: $showWipeConfirm2, titleVisibility: .visible) {
+                Button("彻底清空，无法恢复", role: .destructive) { wipe() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("将删除胎动 \(kickEvents.count) 条、宫缩 \(contractions.filter { $0.endedAt != nil }.count) 次，包括轮次和间隔信息，删除后无法找回。")
             }
         }
     }
