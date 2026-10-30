@@ -36,7 +36,7 @@ struct ContractionView: View {
             .padding(.top, 8)
             .padding(.bottom, 30)
         }
-        .background(Pal.bg.ignoresSafeArea())
+        .background(GlassBackdrop())
         .navigationTitle("宫缩")
         .navigationBarTitleDisplayMode(.inline)
     }
