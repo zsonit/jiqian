@@ -194,4 +194,21 @@ enum SummaryBuilder {
         let kicks = (try? context.fetch(FetchDescriptor<KickEvent>())) ?? []
         return kicks.count
     }
+
+    /// 某个自然日的宫缩合计（只计已完成的一次收缩，与摘要正文口径一致）
+    static func contractionsTotal(day: Date) -> Int {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: day)
+        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return 0 }
+        let context = JiQianStore.context
+        let items = (try? context.fetch(FetchDescriptor<ContractionEvent>(sortBy: [SortDescriptor(\.startedAt)]))) ?? []
+        return items.filter { $0.endedAt != nil && $0.startedAt >= start && $0.startedAt < end }.count
+    }
+
+    /// 全部历史宫缩合计
+    static func contractionsTotalAll() -> Int {
+        let context = JiQianStore.context
+        let items = (try? context.fetch(FetchDescriptor<ContractionEvent>())) ?? []
+        return items.filter { $0.endedAt != nil }.count
+    }
 }
