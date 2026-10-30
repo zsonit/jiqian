@@ -143,7 +143,7 @@ struct ActionsView: View {
                 .padding(.top, 6)
                 .padding(.bottom, 30)
             }
-            .background(Pal.bg.ignoresSafeArea())
+            .background(GlassBackdrop())
             .navigationTitle("快捷指令")
             .navigationBarTitleDisplayMode(.inline)
     }
