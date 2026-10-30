@@ -13,6 +13,7 @@ struct SummaryView: View {
     @State private var selectedDate = Date()
     @State private var text: String = ""
     @State private var totalKicks = 0
+    @State private var totalContractions = 0
     @State private var copied = false
     @State private var showEmptyAlert = false
 
@@ -39,23 +40,22 @@ struct SummaryView: View {
                         }
                     }
 
-                    // 右上角合计大字
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(scope == .byDay ? "当日胎动合计" : "累计胎动合计")
+                    // 右上角合计大字：胎动 / 宫缩并排
+                    HStack(alignment: .center, spacing: 0) {
+                        Text(scope == .byDay ? "当日合计" : "累计合计")
                             .font(.system(size: 14))
                             .foregroundStyle(Pal.ink2)
-                        Spacer()
-                        HStack(alignment: .firstTextBaseline, spacing: 3) {
-                            Text("\(totalKicks)")
-                                .font(.system(size: 38, weight: .bold))
-                                .monospacedDigit()
-                                .foregroundStyle(Pal.brand)
-                            Text("次")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(Pal.ink2)
-                        }
+                        Spacer(minLength: 10)
+                        totalBig(value: totalKicks, label: "胎动", tint: Pal.brand)
+                        Rectangle()
+                            .fill(Pal.line)
+                            .frame(width: 1, height: 36)
+                            .padding(.horizontal, 13)
+                        totalBig(value: totalContractions, label: "宫缩", tint: Pal.gold)
                     }
                     .padding(.horizontal, 4)
+                    .animation(.easeOut(duration: 0.2), value: totalKicks)
+                    .animation(.easeOut(duration: 0.2), value: totalContractions)
 
                     CardBox {
                         Text(text)
@@ -126,6 +126,41 @@ struct SummaryView: View {
 
     // MARK: - 分享
 
+    /// 页面右上角的单个合计块：小标签在上，数字 + 单位在下
+    private func totalBig(value: Int, label: String, tint: Color) -> some View {
+        VStack(alignment: .trailing, spacing: -1) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(Pal.ink3)
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text("\(value)")
+                    .font(.system(size: 32, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(tint)
+                Text("次")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Pal.ink2)
+            }
+        }
+    }
+
+    /// 分享图里的合计块（字号更紧凑）
+    private func totalInImage(value: Int, label: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color(hex: 0x5F6D74))
+            Text("\(value)")
+                .font(.system(size: 22, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+            Text("次")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color(hex: 0x5F6D74))
+        }
+    }
+
     private func shareAsText() {
         guard !text.isEmpty else { showEmptyAlert = true; return }
         // 兜底：先复制，即使目标 App 不收纯文本，聊天框长按粘贴也能用
@@ -150,19 +185,16 @@ struct SummaryView: View {
             : "胎动 · 就诊摘要（全部记录）"
         let title = "\(periodTitle)\n\(Fmt.longDate(Date()))"
         let content = VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
+            HStack(alignment: .top, spacing: 10) {
                 Text(title)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(Color(hex: 0x16232B))
-                Spacer()
-                HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text("\(totalKicks)")
-                        .font(.system(size: 34, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(Color(hex: 0xD9548C))
-                    Text("次")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color(hex: 0x5F6D74))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                // 与页面一致：右上角同时给出胎动、宫缩合计
+                VStack(alignment: .trailing, spacing: 5) {
+                    totalInImage(value: totalKicks, label: "胎动", tint: Color(hex: 0xD9548C))
+                    totalInImage(value: totalContractions, label: "宫缩", tint: Color(hex: 0xC08089))
                 }
             }
             Rectangle()
@@ -192,5 +224,8 @@ struct SummaryView: View {
         totalKicks = scope == .byDay
             ? SummaryBuilder.kicksTotal(day: selectedDate)
             : SummaryBuilder.kicksTotalAll()
+        totalContractions = scope == .byDay
+            ? SummaryBuilder.contractionsTotal(day: selectedDate)
+            : SummaryBuilder.contractionsTotalAll()
     }
 }
