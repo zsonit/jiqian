@@ -12,12 +12,9 @@ struct RootView: View {
             SummaryView()
                 .tabItem { Label("摘要", systemImage: "doc.text") }
                 .tag(1)
-            ActionsView()
-                .tabItem { Label("快捷指令", systemImage: "bolt") }
-                .tag(2)
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }
-                .tag(3)
+                .tag(2)
         }
         .tint(Pal.brand)
         .onOpenURL { url in
