@@ -6,12 +6,14 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
+            // 固定背景层：不参与切页动画，避免缩放时露出空白，也不再重复渲染模糊
+            GlassBackdrop()
             page(HomeView(), index: 0)
             page(SummaryView(), index: 1)
             page(SettingsView(), index: 2)
         }
-        // 页面切换：Q 弹弹簧过渡（新页从 94% 放大弹出，旧页缩小淡出）
-        .animation(.spring(response: 0.45, dampingFraction: 0.7), value: tab)
+        // 页面切换：轻量 Q 弹过渡（只动透明度+微缩放，避免卡顿）
+        .animation(.spring(response: 0.42, dampingFraction: 0.75), value: tab)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GlassTabBar(selection: $tab)
         }
@@ -27,8 +29,8 @@ struct RootView: View {
         let active = tab == index
         view
             .opacity(active ? 1 : 0)
-            .scaleEffect(active ? 1 : 0.94)
-            .offset(y: active ? 0 : 16)
+            .scaleEffect(active ? 1 : 0.97)
+            .offset(y: active ? 0 : 8)
             .allowsHitTesting(active)
     }
 }

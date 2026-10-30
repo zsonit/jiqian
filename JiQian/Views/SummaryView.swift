@@ -105,7 +105,6 @@ struct SummaryView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 30)
             }
-            .background(GlassBackdrop())
             .navigationTitle("就诊摘要")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { reload() }

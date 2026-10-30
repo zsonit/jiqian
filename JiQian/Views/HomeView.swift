@@ -63,7 +63,6 @@ struct HomeView: View {
                 .padding(.top, 6)
                 .padding(.bottom, 30)
             }
-            .background(GlassBackdrop())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: HomeRoute.self) { route in
                 switch route {

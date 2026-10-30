@@ -36,7 +36,6 @@ struct KickView: View {
             .padding(.top, 8)
             .padding(.bottom, 30)
         }
-        .background(GlassBackdrop())
         .navigationTitle("胎动")
         .navigationBarTitleDisplayMode(.inline)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now in
