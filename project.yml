@@ -26,8 +26,8 @@ targets:
       properties:
         CFBundleDisplayName: 胎动
         CFBundleName: JiQian
-        CFBundleShortVersionString: "3.8"
-        CFBundleVersion: "38"
+        CFBundleShortVersionString: "3.9"
+        CFBundleVersion: "39"
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -48,8 +48,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jiqian.app
         PRODUCT_NAME: JiQian
-        MARKETING_VERSION: "3.8"
-        CURRENT_PROJECT_VERSION: "38"
+        MARKETING_VERSION: "3.9"
+        CURRENT_PROJECT_VERSION: "39"
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
