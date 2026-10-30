@@ -84,8 +84,9 @@ struct GlassTabBar: View {
             item(icon: "doc.text", title: "摘要", tag: 1)
             item(icon: "gearshape", title: "设置", tag: 2)
         }
+        .animation(.spring(response: 0.32, dampingFraction: 0.72), value: selection)
         .padding(6)
-        .modifier(LiquidGlass(interactive: true))
+        .modifier(LiquidGlass(interactive: false))
         .padding(.horizontal, 20)
         .padding(.bottom, 4)
     }
@@ -93,11 +94,8 @@ struct GlassTabBar: View {
     private func item(icon: String, title: String, tag: Int) -> some View {
         let selected = selection == tag
         return Button {
-            guard selection != tag else { return }
-            // 果冻感的液态滑动：弹性略大，让选中块像液体一样荡过去
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.62)) {
-                selection = tag
-            }
+            // 立即切页，不等动画
+            selection = tag
         } label: {
             VStack(spacing: 2) {
                 Image(systemName: icon)
@@ -108,7 +106,9 @@ struct GlassTabBar: View {
             }
             .foregroundStyle(selected ? Pal.brand : Pal.ink2)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
+            .frame(minHeight: 44)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
             .background {
                 if selected {
                     // 选中指示块：透明液态玻璃（淡品牌色透底 + 高光 + 白描边）
