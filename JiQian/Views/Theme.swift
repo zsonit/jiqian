@@ -118,7 +118,7 @@ struct GlassBackdrop: View {
                          size: geo.size.width * 0.9,
                          center: CGPoint(x: geo.size.width * 0.42, y: geo.size.height * 1.08))
                 }
-                .blur(70)
+                .blur(radius: 70)
             }
         }
         .ignoresSafeArea()
