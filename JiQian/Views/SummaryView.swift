@@ -12,6 +12,7 @@ struct SummaryView: View {
     @State private var scope: Scope = .byDay
     @State private var selectedDate = Date()
     @State private var text: String = ""
+    @State private var totalKicks = 0
     @State private var copied = false
     @State private var showEmptyAlert = false
 
@@ -37,6 +38,24 @@ struct SummaryView: View {
                             .tint(Pal.brand)
                         }
                     }
+
+                    // 右上角合计大字
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(scope == .byDay ? "当日胎动合计" : "累计胎动合计")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Pal.ink2)
+                        Spacer()
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text("\(totalKicks)")
+                                .font(.system(size: 38, weight: .bold))
+                                .monospacedDigit()
+                                .foregroundStyle(Pal.brand)
+                            Text("次")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Pal.ink2)
+                        }
+                    }
+                    .padding(.horizontal, 4)
 
                     CardBox {
                         Text(text)
@@ -133,9 +152,21 @@ struct SummaryView: View {
             : "胎动 · 就诊摘要（全部记录）"
         let title = "\(periodTitle)\n\(Fmt.longDate(Date()))"
         let content = VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(Color(hex: 0x16232B))
+            HStack(alignment: .top) {
+                Text(title)
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(Color(hex: 0x16232B))
+                Spacer()
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text("\(totalKicks)")
+                        .font(.system(size: 34, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color(hex: 0x2A9D8F))
+                    Text("次")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color(hex: 0x5F6D74))
+                }
+            }
             Rectangle()
                 .fill(Color(hex: 0x2A9D8F))
                 .frame(width: 44, height: 3)
@@ -160,5 +191,8 @@ struct SummaryView: View {
         text = scope == .byDay
             ? SummaryBuilder.build(day: selectedDate)
             : SummaryBuilder.build(range: .all)
+        totalKicks = scope == .byDay
+            ? SummaryBuilder.kicksTotal(day: selectedDate)
+            : SummaryBuilder.kicksTotalAll()
     }
 }
