@@ -80,6 +80,19 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("快捷指令") {
+                    NavigationLink {
+                        ActionsView()
+                    } label: {
+                        HStack {
+                            Image(systemName: "bolt")
+                                .foregroundStyle(Pal.brand)
+                            Text("桌面快捷指令创建指南")
+                            Spacer()
+                        }
+                    }
+                }
+
                 Section("产科联系方式") {
                     TextField("机构名称", text: $provider)
                         .textInputAutocapitalization(.never)
