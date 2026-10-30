@@ -270,7 +270,7 @@ fun ContractionScreen() {
     var running by remember { mutableStateOf(false) }
     var startAt by remember { mutableStateOf(0L) }
     var tick by remember { mutableStateOf(0) }
-    LaunchedEffect(running.value) { while (running.value) { kotlinx.coroutines.delay(500); tick++ } }
+    LaunchedEffect(running) { while (running) { kotlinx.coroutines.delay(500); tick++ } }
 
     val list = Store.contractions(ctx).sortedByDescending { it.first }
 
@@ -280,7 +280,7 @@ fun ContractionScreen() {
         Spacer(Modifier.height(18.dp))
         Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = BrandSoft)) {
             Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (running.value) {
+                if (running) {
                     val elapsed = (System.currentTimeMillis() - startAt) / 1000
                     Text("%02d:%02d".format(elapsed / 60, elapsed % 60), fontSize = 52.sp, fontWeight = FontWeight.Bold, color = Brand)
                     Text("收缩中…", fontSize = 13.sp, color = Ink2)
@@ -294,22 +294,22 @@ fun ContractionScreen() {
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = {
-                if (!running.value) {
+                if (!running) {
                     startAt = System.currentTimeMillis()
-                    running.value = true
+                    running = true
                     Feedback.click(ctx)
                 } else {
                     Store.addContraction(ctx, startAt, System.currentTimeMillis())
-                    running.value = false
+                    running = false
                     Feedback.click(ctx)
                 }
                 tick++
             },
             modifier = Modifier.fillMaxWidth().height(58.dp),
             shape = RoundedCornerShape(50),
-            colors = ButtonDefaults.buttonColors(containerColor = if (running.value) Danger else Brand)
+            colors = ButtonDefaults.buttonColors(containerColor = if (running) Danger else Brand)
         ) {
-            Text(if (running.value) "结束本次收缩" else "开始宫缩计时", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(if (running) "结束本次收缩" else "开始宫缩计时", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
 
         Spacer(Modifier.height(16.dp))
