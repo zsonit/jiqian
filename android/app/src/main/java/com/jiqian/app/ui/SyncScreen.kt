@@ -1,0 +1,193 @@
+package com.jiqian.app
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+// ---------- 配对同步 ----------
+// 一台手机创建配对码，另一台输入同一个码，之后双方联网就自动双向同步全部记录。
+
+@Composable
+fun SyncScreen(onClose: () -> Unit) {
+    // SyncManager 的状态是 Compose snapshot state，组合期直接读取即自动订阅刷新
+    val busy = SyncManager.busy
+    val lastMessage = SyncManager.lastMessage
+    val lastSyncAt = SyncManager.lastSyncAt
+    var running by remember { mutableStateOf(false) }
+    var joinText by remember { mutableStateOf("") }
+    var toast by remember { mutableStateOf<String?>(null) }
+
+    fun toast(msg: String) {
+        toast = msg
+        Thread {
+            Thread.sleep(2200)
+            toast = null
+        }.start()
+    }
+
+    fun run(block: () -> SyncResult) {
+        running = true
+        Thread {
+            val r = block()
+            running = false
+            toast(r.message)
+        }.start()
+    }
+
+    val code = SyncManager.pairedCode
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Bg)
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("‹ 返回", fontSize = 15.sp, color = Brand, modifier = Modifier.clickable { onClose() })
+            Text("☁️ 配对同步", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Spacer(Modifier.width(40.dp))
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        if (code == null) {
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("怎么用", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+                    Text(
+                        "① 这台手机点「创建配对码」\n② 家人手机装好胎动后输入同一个码\n③ 之后所有手机联网就自动同步全部记录\n（准爸爸、长辈的手机都可以加，数量不限）",
+                        fontSize = 13.sp, color = Ink2, modifier = Modifier.padding(top = 6.dp), lineHeight = 19.sp
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = { run { SyncManager.createPairing() } },
+                enabled = !running,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(50),
+                colors = ButtonDefaults.buttonColors(containerColor = Brand)
+            ) { Text(if (running) "正在创建…" else "创建配对码", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+
+            Spacer(Modifier.height(12.dp))
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("已有配对码？", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = joinText,
+                        onValueChange = { joinText = it.filter { c -> c.isDigit() }.take(6) },
+                        placeholder = { Text("输入对方的 6 位配对码", fontSize = 13.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = { run { SyncManager.joinPairing(joinText) } },
+                        enabled = !running && joinText.length == 6,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(containerColor = Brand)
+                    ) { Text(if (running) "正在配对…" else "加入配对", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+                }
+            }
+        } else {
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("配对码", fontSize = 12.sp, color = Ink2)
+                    Text(
+                        code.chunked(3).joinToString(" "),
+                        fontSize = 34.sp, fontWeight = FontWeight.Bold, color = Brand
+                    )
+                    Text(
+                        "把这个码告诉家人，任何一台手机装好胎动后在「设置 → 配对同步」输入即可加入，数量不限",
+                        fontSize = 11.5.sp, color = Ink2, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        lineHeight = 16.sp, modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("上次同步", fontSize = 13.sp, color = Ink2)
+                            Text(lastSyncText(lastSyncAt), fontSize = 12.sp, color = Ink2)
+                        }
+                        if (busy || running) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Brand)
+                    }
+                    lastMessage?.let {
+                        Text(it, fontSize = 12.sp, color = Ink2, modifier = Modifier.padding(top = 6.dp))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = { run { SyncManager.syncNow(manual = true) } },
+                        enabled = !busy && !running,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(containerColor = Brand)
+                    ) { Text(if (busy || running) "同步中…" else "立即同步", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+
+                    TextButton(
+                        onClick = { run { SyncManager.unlink() } },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) { Text("解除配对", fontSize = 13.sp, color = Danger) }
+                    Text(
+                        "解除后：本机和云端的记录都不会消失，只是不再同步；重新输入配对码可再次加入",
+                        fontSize = 10.5.sp, color = Ink2, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        lineHeight = 14.sp
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+            Text(
+                "* 一个配对码可以加到多部手机，大家看到的是同一份记录\n" +
+                    "* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n" +
+                    "* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n" +
+                    "* 各自新增的记录都会保留；同一处改动，后改的生效\n" +
+                    "* 「撤销上一次」「清空记录」也会同步到对端\n" +
+                    "* 解除配对只会停止同步：本机与云端的记录都保留\n" +
+                    "* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n" +
+                    "* 配对码就是唯一的钥匙，请只告诉家人",
+                fontSize = 11.sp, color = Ink2, lineHeight = 16.sp, modifier = Modifier.padding(16.dp)
+            )
+        }
+
+        toast?.let {
+            Box(Modifier.fillMaxWidth().padding(top = 14.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    it,
+                    fontSize = 12.5.sp, fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(50))
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun lastSyncText(at: Long): String {
+    if (at <= 0L) return "还没同步过"
+    return SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(at))
+}

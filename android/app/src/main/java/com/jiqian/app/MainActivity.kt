@@ -64,15 +64,33 @@ object Store {
         val l = kicks(ctx); l.add(System.currentTimeMillis())
         val a = JSONArray(); l.forEach { a.put(it) }
         sp(ctx).edit().putString(KEY_KICKS, a.toString()).apply()
+        SyncManager.onDataChanged()
     }
 
     fun removeLastKick(ctx: Context) {
-        val l = kicks(ctx); if (l.isNotEmpty()) l.removeAt(l.size - 1)
+        val l = kicks(ctx); if (l.isNotEmpty()) {
+            val removed = l.removeAt(l.size - 1)
+            // 撤销也要跨端生效：写墓碑（以发生时间毫秒为锚点），对端会删掉同一条
+            SyncManager.addTombstone("ke@$removed")
+        }
         val a = JSONArray(); l.forEach { a.put(it) }
         sp(ctx).edit().putString(KEY_KICKS, a.toString()).apply()
+        SyncManager.onDataChanged()
     }
 
-    fun clearKicks(ctx: Context) { sp(ctx).edit().putString(KEY_KICKS, "[]").apply() }
+    fun clearKicks(ctx: Context) {
+        // 部分清空：逐条写墓碑，让对端也删掉这些胎动
+        kicks(ctx).forEach { SyncManager.addTombstone("ke@$it") }
+        sp(ctx).edit().putString(KEY_KICKS, "[]").apply()
+        SyncManager.onDataChanged()
+    }
+
+    /** 同步引擎专用：整体替换本机数据（不触发 onDataChanged，避免同步循环） */
+    fun replaceAll(ctx: Context, newKicks: List<Long>, newCtns: List<Pair<Long, Long>>) {
+        val ka = JSONArray(); newKicks.forEach { ka.put(it) }
+        val ca = JSONArray(); newCtns.forEach { ca.put(JSONObject().put("s", it.first).put("e", it.second)) }
+        sp(ctx).edit().putString(KEY_KICKS, ka.toString()).putString(KEY_CONTRACTIONS, ca.toString()).apply()
+    }
 
     fun contractions(ctx: Context): MutableList<Pair<Long, Long>> {
         val a = JSONArray(sp(ctx).getString(KEY_CONTRACTIONS, "[]"))
@@ -85,9 +103,15 @@ object Store {
         val l = contractions(ctx); l.add(Pair(start, end))
         val a = JSONArray(); l.forEach { a.put(JSONObject().put("s", it.first).put("e", it.second)) }
         sp(ctx).edit().putString(KEY_CONTRACTIONS, a.toString()).apply()
+        SyncManager.onDataChanged()
     }
 
-    fun clearContractions(ctx: Context) { sp(ctx).edit().putString(KEY_CONTRACTIONS, "[]").apply() }
+    fun clearContractions(ctx: Context) {
+        // 部分清空：逐条写墓碑（以开始时间为锚点），让对端也删掉这些宫缩
+        contractions(ctx).forEach { SyncManager.addTombstone("ce@${it.first}") }
+        sp(ctx).edit().putString(KEY_CONTRACTIONS, "[]").apply()
+        SyncManager.onDataChanged()
+    }
 
     fun roundMin(ctx: Context) = sp(ctx).getInt(KEY_PREFS + "roundMin", 60)
     fun setRoundMin(ctx: Context, v: Int) = sp(ctx).edit().putInt(KEY_PREFS + "roundMin", v).apply()
@@ -142,24 +166,37 @@ fun dayStart(t: Long): Long {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SyncManager.bootstrap(applicationContext)
         setContent { App() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        SyncManager.onForeground()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        SyncManager.onBackground()
     }
 }
 
 @Composable
 fun App() {
     var tab by remember { mutableStateOf(0) }
+    var showSync by remember { mutableStateOf(false) }
     MaterialTheme(
         colorScheme = lightColorScheme(primary = Brand, background = Bg, surface = Bg)
     ) {
         Surface(Modifier.fillMaxSize(), color = Bg) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f)) {
-                    when (tab) {
-                        0 -> KickScreen()
-                        1 -> ContractionScreen()
-                        2 -> SummaryScreen()
-                        else -> SettingsScreen()
+                    when {
+                        showSync -> SyncScreen(onClose = { showSync = false })
+                        tab == 0 -> KickScreen()
+                        tab == 1 -> ContractionScreen()
+                        tab == 2 -> SummaryScreen()
+                        else -> SettingsScreen(onOpenSync = { showSync = true })
                     }
                 }
                 BottomBar(tab) { tab = it }
@@ -427,7 +464,7 @@ fun SummaryScreen() {
 
 // ---------- 设置 ----------
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(onOpenSync: () -> Unit) {
     val ctx = LocalContext.current
     var roundMin by remember { mutableStateOf(Store.roundMin(ctx)) }
     var sound by remember { mutableStateOf(Store.soundOn(ctx)) }
@@ -439,6 +476,27 @@ fun SettingsScreen() {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("设置", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
+
+        Spacer(Modifier.height(16.dp))
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = CardBg),
+            modifier = Modifier.fillMaxWidth().clickable { onOpenSync() }
+        ) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("☁️", fontSize = 16.sp)
+                Text("配对同步", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.padding(start = 8.dp))
+                Spacer(Modifier.weight(1f))
+                Text(
+                    SyncManager.pairedCode?.let { "已配对 ${it.take(3)}···" } ?: "未配对",
+                    fontSize = 12.sp, color = Ink2
+                )
+            }
+        }
+        Text(
+            "用 6 位配对码把这台手机和家人的手机连起来，记录端到端加密后自动双向同步",
+            fontSize = 11.sp, color = Ink2, lineHeight = 15.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+        )
 
         Spacer(Modifier.height(16.dp))
         Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
@@ -501,7 +559,7 @@ fun SettingsScreen() {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.5 · 本地优先，无账号、无上传、无广告", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v4.6 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = if (wipeKind == "kicks") "胎动" else "宫缩"

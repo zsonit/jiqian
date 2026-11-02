@@ -56,12 +56,14 @@ enum ContractionRecorder {
         if let s = session, date.timeIntervalSince(s.startedAt) > sessionTTL {
             s.endedAt = s.startedAt.addingTimeInterval(sessionTTL)
             try ctx.save()
+            SyncManager.shared.onDataChanged()
             session = nil
         }
         if session == nil {
             let created = ContractionSession(startedAt: date, source: source)
             ctx.insert(created)
             try ctx.save()
+            SyncManager.shared.onDataChanged()
             session = created
         }
         guard let targetSession = session else {
@@ -70,6 +72,7 @@ enum ContractionRecorder {
         let event = ContractionEvent(sessionID: targetSession.id, startedAt: date, source: source)
         ctx.insert(event)
         try ctx.save()
+        SyncManager.shared.onDataChanged()
         return ContractionOutcome(started: true)
     }
 
@@ -91,6 +94,7 @@ enum ContractionRecorder {
         }
         event.gap = gap
         try ctx.save()
+        SyncManager.shared.onDataChanged()
         return ContractionOutcome(ended: true,
                                   duration: duration,
                                   gap: gap,

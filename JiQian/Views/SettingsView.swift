@@ -16,6 +16,7 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var context
     @Query private var kickEvents: [KickEvent]
     @Query private var contractions: [ContractionEvent]
+    @ObservedObject private var sync = SyncManager.shared
 
     @State private var showWipeConfirm = false
     @State private var showWipeConfirm2 = false
@@ -94,6 +95,26 @@ struct SettingsView: View {
                     }
                 }
 
+                Section {
+                    NavigationLink {
+                        SyncView()
+                    } label: {
+                        HStack {
+                            Image(systemName: "cloud.fill")
+                                .foregroundStyle(Pal.brand)
+                            Text("配对同步")
+                            Spacer()
+                            Text(syncStatusText)
+                                .font(.caption)
+                                .foregroundStyle(Pal.ink2)
+                        }
+                    }
+                } header: {
+                    Text("同步")
+                } footer: {
+                    Text("用 6 位配对码把这台手机和家人的手机连起来，记录端到端加密后自动双向同步。不配对则一切只存本机。")
+                }
+
                 Section("产科联系方式") {
                     TextField("机构名称", text: $provider)
                         .textInputAutocapitalization(.never)
@@ -130,7 +151,7 @@ struct SettingsView: View {
                 } header: {
                     Text("数据")
                 } footer: {
-                    Text("全部数据只存在这台设备上，没有账号，也不会上传。卸载应用即删除。")
+                    Text("不配对时全部数据只存在这台设备上，没有账号，也不会上传。卸载应用即删除。开启配对同步后，记录会在你的配对设备间加密同步。")
                 }
 
                 Section {
@@ -164,6 +185,13 @@ struct SettingsView: View {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "3.1"
     }
 
+    private var syncStatusText: String {
+        if let code = sync.pairedCode {
+            return "已配对 \(code.prefix(3))···"
+        }
+        return "未配对"
+    }
+
     private func binding(for tag: String) -> Binding<Bool> {
         Binding(
             get: { riskSet.contains(tag) },
@@ -185,6 +213,9 @@ struct SettingsView: View {
             for session in sessions { context.delete(session) }
         }
         try? context.save()
+        // 清空也要跨端生效：写清空时间戳，对端锚点早于它的记录一并删除
+        SyncManager.markCleared()
+        SyncManager.shared.onDataChanged()
         Haptic.success()
     }
 }

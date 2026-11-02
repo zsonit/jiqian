@@ -1,0 +1,228 @@
+import SwiftUI
+
+// MARK: - 配对同步页
+//
+// 一台手机创建配对码，另一台输入同一个码，之后双方联网就自动双向同步全部记录。
+// 从「设置 → ☁️ 配对同步」进入（在设置的 NavigationStack 内被 push）。
+
+struct SyncView: View {
+    @ObservedObject private var sync = SyncManager.shared
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var joinText = ""
+    @State private var running = false
+    @State private var toast: String?
+
+    private var code: String? { sync.pairedCode }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                if let code {
+                    pairedSection(code)
+                } else {
+                    howToCard
+                    createCard
+                    joinCard
+                }
+                notesCard
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 30)
+        }
+        .background(Pal.bg.ignoresSafeArea())
+        .navigationTitle("☁️ 配对同步")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) {
+            if let toast {
+                Text(toast)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Capsule().fill(Color.black.opacity(0.75)))
+                    .padding(.bottom, 40)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    // MARK: 未配对
+
+    private var howToCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("怎么用").font(.system(size: 13, weight: .bold)).foregroundStyle(Pal.ink)
+                Text("① 这台手机点「创建配对码」\n② 家人手机装好胎动后输入同一个码\n③ 之后所有手机联网就自动同步全部记录\n（准爸爸、长辈的手机都可以加，数量不限）")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Pal.ink2)
+                    .lineSpacing(4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var createCard: some View {
+        card {
+            Button {
+                run { sync.createPairing() }
+            } label: {
+                Text(running ? "正在创建…" : "创建配对码")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Pal.brand))
+            }
+            .buttonStyle(.plain)
+            .disabled(running)
+        }
+    }
+
+    private var joinCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("已有配对码？").font(.system(size: 13, weight: .bold)).foregroundStyle(Pal.ink)
+                TextField("输入对方的 6 位配对码", text: $joinText)
+                    .keyboardType(.numberPad)
+                    .font(.system(size: 14))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Pal.brandSoft)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Button {
+                    run { sync.joinPairing(joinText) }
+                } label: {
+                    Text(running ? "正在配对…" : "加入配对")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(joinText.isEmpty ? Pal.ink3.opacity(0.4) : Pal.brand))
+                }
+                .buttonStyle(.plain)
+                .disabled(running || joinText.isEmpty)
+            }
+        }
+    }
+
+    // MARK: 已配对
+
+    private func pairedSection(_ code: String) -> some View {
+        VStack(spacing: 14) {
+            card {
+                VStack(spacing: 6) {
+                    Text("配对码").font(.system(size: 12)).foregroundStyle(Pal.ink3)
+                    Text(code.chunked(3).joined(separator: " "))
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(Pal.brand)
+                        .kerning(2)
+                    Text("把这个码告诉家人，任何一台手机装好胎动后在「设置 → 配对同步」输入即可加入，数量不限")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Pal.ink3)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            card {
+                VStack(spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("上次同步").font(.system(size: 12.5)).foregroundStyle(Pal.ink2)
+                            Text(lastSyncText)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Pal.ink3)
+                        }
+                        Spacer()
+                        if sync.busy || running {
+                            ProgressView().scaleEffect(0.8)
+                        }
+                    }
+                    if let msg = sync.lastMessage {
+                        Text(msg).font(.system(size: 11.5)).foregroundStyle(Pal.ink3)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Button {
+                        run { sync.syncNow(manual: true) }
+                    } label: {
+                        Text(sync.busy || running ? "同步中…" : "立即同步")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Pal.brand))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(sync.busy || running)
+
+                    Button {
+                        run { sync.unlink() }
+                    } label: {
+                        Text("解除配对")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Pal.danger)
+                    }
+                    .buttonStyle(.plain)
+                    Text("解除后：本机和云端的记录都不会消失，只是不再同步；重新输入配对码可再次加入")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Pal.ink3)
+                        .multilineTextAlignment(.center)
+                }
+            }
+        }
+    }
+
+    private var lastSyncText: String {
+        guard sync.lastSyncAt > 0 else { return "还没同步过" }
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: sync.lastSyncAt))
+    }
+
+    private var notesCard: some View {
+        card {
+            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
+                .font(.system(size: 11))
+                .foregroundStyle(Pal.ink3)
+                .lineSpacing(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // MARK: 工具
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0) { content() }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Pal.card)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func run(_ block: @escaping () -> SyncOutcome) {
+        running = true
+        DispatchQueue.global().async {
+            let outcome = block()
+            DispatchQueue.main.async {
+                running = false
+                withAnimation { toast = outcome.message }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                    withAnimation { toast = nil }
+                }
+            }
+        }
+    }
+}
+
+extension String {
+    func chunked(_ size: Int) -> [String] {
+        stride(from: 0, to: count, by: size).map {
+            let start = index(startIndex, offsetBy: $0)
+            let end = index(start, offsetBy: min(size, count - $0))
+            return String(self[start..<end])
+        }
+    }
+}

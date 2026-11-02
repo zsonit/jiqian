@@ -31,6 +31,7 @@ enum KickRecorder {
                                source: current.source)
         ctx.insert(next)
         try ctx.save()
+        SyncManager.shared.onDataChanged()
         return true
     }
 
@@ -63,6 +64,7 @@ enum KickRecorder {
         let event = KickEvent(sessionID: session.id, occurredAt: date, source: source)
         ctx.insert(event)
         try ctx.save()
+        SyncManager.shared.onDataChanged()
 
         let total = try events(of: session.id, in: ctx).count
         return KickOutcome(saved: true,
@@ -79,6 +81,7 @@ enum KickRecorder {
                 current.endedAt = current.startedAt.addingTimeInterval(roundLength)
                 current.finishedReason = "timeup"
                 try ctx.save()
+                SyncManager.shared.onDataChanged()
             } else {
                 return current
             }
@@ -86,6 +89,7 @@ enum KickRecorder {
         let session = KickSession(startedAt: date, targetCount: Prefs.target, source: source)
         ctx.insert(session)
         try ctx.save()
+        SyncManager.shared.onDataChanged()
         return session
     }
 
@@ -96,10 +100,12 @@ enum KickRecorder {
             current.endedAt = date
             current.finishedReason = "replaced"
             try ctx.save()
+            SyncManager.shared.onDataChanged()
         }
         let session = KickSession(startedAt: date, targetCount: Prefs.target, source: source)
         ctx.insert(session)
         try ctx.save()
+        SyncManager.shared.onDataChanged()
         return session
     }
 
@@ -109,6 +115,7 @@ enum KickRecorder {
         current.endedAt = Date()
         current.finishedReason = reason
         try ctx.save()
+        SyncManager.shared.onDataChanged()
     }
 
     @discardableResult
@@ -117,8 +124,12 @@ enum KickRecorder {
         guard let current = try activeSession(in: ctx) else { return false }
         let list = try events(of: current.id, in: ctx)
         guard let last = list.last else { return false }
+        let anchor = SnapshotIO.ms(last.occurredAt)
         ctx.delete(last)
         try ctx.save()
+        // 撤销也要跨端生效：写墓碑，对端会删掉同一条
+        SyncManager.addTombstone(SyncTombstone.kick(anchor))
+        SyncManager.shared.onDataChanged()
         return true
     }
 
@@ -127,6 +138,7 @@ enum KickRecorder {
         guard let current = try activeSession(in: ctx) else { return }
         current.lessThanUsualRaw = lessThanUsual ? 1 : 0
         try ctx.save()
+        SyncManager.shared.onDataChanged()
     }
 
     /// 超过计数窗口仍未达标时返回提示数据（不构成诊断）
