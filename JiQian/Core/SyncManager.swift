@@ -225,7 +225,7 @@ final class SyncManager: ObservableObject {
     }
 
     /// 同步后刷新 UI 可观察的权限状态
-    private func refreshAccess(acl newACL: SyncSnapshot.ACL?) {
+    private func refreshAccess(_ newACL: SyncSnapshot.ACL?) {
         saveACL(newACL)
         DispatchQueue.main.async {
             self.acl = newACL
