@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONObject
 
 // ---------- 配对同步 ----------
 // 一台手机创建配对码，另一台输入同一个码，之后双方联网就自动双向同步全部记录。
@@ -124,6 +125,20 @@ fun SyncScreen(onClose: () -> Unit) {
             }
 
             Spacer(Modifier.height(12.dp))
+            PermissionCard(
+                canEdit = SyncManager.canEdit,
+                hasRequested = SyncManager.storedAclPublic()?.optJSONArray("req")
+                    ?.let { arr -> (0 until arr.length()).any { arr.optJSONObject(it)?.optString("id") == SyncManager.deviceId() } } ?: false,
+                requests = SyncManager.storedAclPublic()?.optJSONArray("req")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+                } ?: emptyList(),
+                onRequest = { run { SyncManager.requestEditPermission() } },
+                onCancelRequest = { run { SyncManager.cancelEditPermission() } },
+                onGrant = { id -> run { SyncManager.grantWriter(id) } },
+                onDeny = { id -> run { SyncManager.denyRequest(id) } },
+            )
+
+            Spacer(Modifier.height(12.dp))
             Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -162,6 +177,7 @@ fun SyncScreen(onClose: () -> Unit) {
         Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
             Text(
                 "* 一个配对码可以加到多部手机，大家看到的是同一份记录\n" +
+                    "* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n" +
                     "* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n" +
                     "* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n" +
                     "* 各自新增的记录都会保留；同一处改动，后改的生效\n" +
@@ -190,4 +206,76 @@ fun SyncScreen(onClose: () -> Unit) {
 private fun lastSyncText(at: Long): String {
     if (at <= 0L) return "还没同步过"
     return SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(at))
+}
+
+// ---------- 权限卡片：创建者可写；加入者默认只读，可申请编辑权限 ----------
+
+@Composable
+fun PermissionCard(
+    canEdit: Boolean,
+    hasRequested: Boolean,
+    requests: List<JSONObject>,
+    onRequest: () -> Unit,
+    onCancelRequest: () -> Unit,
+    onGrant: (String) -> Unit,
+    onDeny: (String) -> Unit,
+) {
+    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+        Column(Modifier.padding(16.dp)) {
+            if (canEdit) {
+                Text("本机权限：可编辑", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Text(
+                    "这台手机可以正常记录胎动和宫缩，改动会同步给所有配对的手机",
+                    fontSize = 12.sp, color = Ink2, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp)
+                )
+                if (requests.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("编辑权限申请", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Ink)
+                    requests.forEach { req ->
+                        val id = req.optString("id")
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("设备 $id", fontSize = 13.sp, color = Ink)
+                                Text(
+                                    "申请于 " + SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
+                                        .format(Date(req.optLong("t", 0L))),
+                                    fontSize = 11.sp, color = Ink2
+                                )
+                            }
+                            Button(
+                                onClick = { onGrant(id) },
+                                shape = RoundedCornerShape(50),
+                                colors = ButtonDefaults.buttonColors(containerColor = Brand),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                            ) { Text("同意", fontSize = 12.5.sp, color = Color.White) }
+                            TextButton(onClick = { onDeny(id) }) { Text("忽略", fontSize = 12.5.sp, color = Ink2) }
+                        }
+                    }
+                }
+            } else {
+                Text("查看模式", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Text(
+                    "只能查看同步过来的记录，无法修改对方的数据。想修改请申请编辑权限，对方同意后即可记录。",
+                    fontSize = 12.sp, color = Ink2, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp)
+                )
+                Spacer(Modifier.height(10.dp))
+                if (hasRequested) {
+                    TextButton(
+                        onClick = onCancelRequest,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("已申请，等待对方同意 · 点按撤销申请", fontSize = 12.5.sp, color = Brand) }
+                } else {
+                    Button(
+                        onClick = onRequest,
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(containerColor = Brand)
+                    ) { Text("申请编辑权限", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+                }
+            }
+        }
+    }
 }

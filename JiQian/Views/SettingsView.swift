@@ -187,7 +187,7 @@ struct SettingsView: View {
 
     private var syncStatusText: String {
         if let code = sync.pairedCode {
-            return "已配对 \(code.prefix(3))···"
+            return sync.canEdit ? "已配对 \(code.prefix(3))···" : "已配对 \(code.prefix(3))···（查看）"
         }
         return "未配对"
     }
@@ -204,6 +204,8 @@ struct SettingsView: View {
     }
 
     private func wipe() {
+        // 查看模式：不能清空同步来的数据
+        guard sync.canEdit else { return }
         for event in kickEvents { context.delete(event) }
         for event in contractions { context.delete(event) }
         if let sessions = try? context.fetch(FetchDescriptor<KickSession>()) {

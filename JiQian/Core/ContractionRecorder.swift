@@ -47,6 +47,10 @@ enum ContractionRecorder {
 
     @discardableResult
     static func start(source: RecordSource, at date: Date = Date()) throws -> ContractionOutcome {
+        // 只读模式（查看端）：宫缩计时一律拦截，数据只从写端同步过来
+        guard SyncManager.shared.canEdit else {
+            return ContractionOutcome(started: false)
+        }
         let ctx = JiQianStore.context
         if try openEvent(in: ctx) != nil {
             return ContractionOutcome(started: false, alreadyRunning: true)
@@ -78,6 +82,9 @@ enum ContractionRecorder {
 
     @discardableResult
     static func end(at date: Date = Date()) throws -> ContractionOutcome {
+        guard SyncManager.shared.canEdit else {
+            return ContractionOutcome(ended: false, noneRunning: true)
+        }
         let ctx = JiQianStore.context
         guard let event = try openEvent(in: ctx) else {
             return ContractionOutcome(ended: false, noneRunning: true)

@@ -61,6 +61,8 @@ object Store {
     }
 
     fun addKick(ctx: Context) {
+        // 查看模式：不能记录（数据由写端同步过来）
+        if (!SyncManager.canEdit) return
         val l = kicks(ctx); l.add(System.currentTimeMillis())
         val a = JSONArray(); l.forEach { a.put(it) }
         sp(ctx).edit().putString(KEY_KICKS, a.toString()).apply()
@@ -68,6 +70,7 @@ object Store {
     }
 
     fun removeLastKick(ctx: Context) {
+        if (!SyncManager.canEdit) return
         val l = kicks(ctx); if (l.isNotEmpty()) {
             val removed = l.removeAt(l.size - 1)
             // 撤销也要跨端生效：写墓碑（以发生时间毫秒为锚点），对端会删掉同一条
@@ -79,6 +82,7 @@ object Store {
     }
 
     fun clearKicks(ctx: Context) {
+        if (!SyncManager.canEdit) return
         // 部分清空：逐条写墓碑，让对端也删掉这些胎动
         kicks(ctx).forEach { SyncManager.addTombstone("ke@$it") }
         sp(ctx).edit().putString(KEY_KICKS, "[]").apply()
@@ -100,6 +104,7 @@ object Store {
     }
 
     fun addContraction(ctx: Context, start: Long, end: Long) {
+        if (!SyncManager.canEdit) return
         val l = contractions(ctx); l.add(Pair(start, end))
         val a = JSONArray(); l.forEach { a.put(JSONObject().put("s", it.first).put("e", it.second)) }
         sp(ctx).edit().putString(KEY_CONTRACTIONS, a.toString()).apply()
@@ -107,6 +112,7 @@ object Store {
     }
 
     fun clearContractions(ctx: Context) {
+        if (!SyncManager.canEdit) return
         // 部分清空：逐条写墓碑（以开始时间为锚点），让对端也删掉这些宫缩
         contractions(ctx).forEach { SyncManager.addTombstone("ce@${it.first}") }
         sp(ctx).edit().putString(KEY_CONTRACTIONS, "[]").apply()
@@ -190,6 +196,14 @@ fun App() {
     ) {
         Surface(Modifier.fillMaxSize(), color = Bg) {
             Column(Modifier.fillMaxSize()) {
+                // 查看模式横幅：配对后未获授权的手机只能看，改不了数据
+                if (SyncManager.pairedCode != null && !SyncManager.canEdit) {
+                    Text(
+                        "👁 查看模式 · 修改数据需在「设置 → 配对同步」申请权限",
+                        fontSize = 11.sp, color = Ink2,
+                        modifier = Modifier.fillMaxWidth().background(BrandSoft).padding(horizontal = 16.dp, vertical = 6.dp)
+                    )
+                }
                 Box(Modifier.weight(1f)) {
                     when {
                         showSync -> SyncScreen(onClose = { showSync = false })
@@ -488,7 +502,9 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
                 Text("配对同步", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.padding(start = 8.dp))
                 Spacer(Modifier.weight(1f))
                 Text(
-                    SyncManager.pairedCode?.let { "已配对 ${it.take(3)}···" } ?: "未配对",
+                    SyncManager.pairedCode?.let {
+                        if (SyncManager.canEdit) "已配对 ${it.take(3)}···" else "已配对 ${it.take(3)}···（查看）"
+                    } ?: "未配对",
                     fontSize = 12.sp, color = Ink2
                 )
             }
@@ -559,7 +575,7 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.6 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v4.7 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = if (wipeKind == "kicks") "胎动" else "宫缩"

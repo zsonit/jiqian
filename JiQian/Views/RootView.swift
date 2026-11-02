@@ -3,6 +3,7 @@ import SwiftData
 
 struct RootView: View {
     @State private var tab: Int = 0
+    @ObservedObject private var sync = SyncManager.shared
 
     var body: some View {
         ZStack {
@@ -14,6 +15,21 @@ struct RootView: View {
         }
         // 页面切换：轻柔淡入上浮，快速到位、不晃眼
         .animation(.easeOut(duration: 0.26), value: tab)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if sync.pairedCode != nil && !sync.canEdit {
+                // 查看模式横幅：这台手机只能看，改不了
+                HStack(spacing: 6) {
+                    Image(systemName: "eye")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("查看模式 · 修改数据需在「设置 → 配对同步」申请权限")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(Pal.ink2)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .background(Pal.brandSoft)
+            }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GlassTabBar(selection: $tab)
         }

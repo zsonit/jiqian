@@ -54,6 +54,21 @@ struct SyncSnapshot: Codable, Equatable {
         var t: Int64          // 删除发生时间（毫秒），用于过期修剪
     }
 
+    /// 配对权限（端到端加密，随快照同步）：
+    /// owner = 创建配对码的设备；writers = 允许修改数据的设备；
+    /// req = 「申请编辑权限」的待审批列表。不在 writers 里 = 只读（查看模式）。
+    /// 两端对 acl 的合并规则一致（owner 以云端为准、writers 并集、req 并集减去已授权），
+    /// 保证各端算出同一结果，不会互推死循环。
+    struct ACL: Codable, Equatable {
+        struct Req: Codable, Equatable {
+            var id: String    // 申请设备的 deviceId
+            var t: Int64      // 申请时间（毫秒），用于排序展示
+        }
+        var owner: String
+        var writers: [String] = []
+        var req: [Req] = []
+    }
+
     var v: Int = 1
     var ks: [KS] = []
     var ke: [KE] = []
@@ -61,6 +76,7 @@ struct SyncSnapshot: Codable, Equatable {
     var ce: [CE] = []
     var cl: Int64 = 0
     var del: [Del] = []
+    var acl: ACL?         // nil = 旧版本配对（全员可写，向后兼容）
 
     /// 本机从头到尾没有任何数据（全新安装）。此时只拉不推，避免空快照盖掉对方。
     var isEmpty: Bool {
@@ -75,6 +91,31 @@ enum SyncTombstone {
 
     static func kick(_ occurredAtMs: Int64) -> String { "ke@\(occurredAtMs)" }
     static func ctn(_ startedAtMs: Int64) -> String { "ce@\(startedAtMs)" }
+}
+
+// MARK: - 权限（acl）合并 —— 两端规则一致，保证收敛
+
+enum SyncACLResolver {
+    static func merge(local: SyncSnapshot.ACL?, remote: SyncSnapshot.ACL?, pendingOwner: String?) -> SyncSnapshot.ACL? {
+        if local == nil && remote == nil {
+            guard let owner = pendingOwner else { return nil }
+            return SyncSnapshot.ACL(owner: owner, writers: [owner], req: [])
+        }
+        // 归属以云端（远端）为准；两端都没有时用本端待登记的创建者
+        let owner = remote?.owner ?? local?.owner ?? pendingOwner ?? ""
+        var writers = Set((local?.writers ?? []) + (remote?.writers ?? []))
+        writers.insert(owner)
+        // 申请并集（同设备保留最新时间），已授权的从申请里移除
+        var reqMap: [String: Int64] = [:]
+        for q in (local?.req ?? []) + (remote?.req ?? []) {
+            reqMap[q.id] = max(reqMap[q.id] ?? 0, q.t)
+        }
+        let req = reqMap
+            .filter { !writers.contains($0.key) }
+            .sorted { $0.value < $1.value }
+            .map { SyncSnapshot.ACL.Req(id: $0.key, t: $0.value) }
+        return SyncSnapshot.ACL(owner: owner, writers: writers.sorted(), req: req)
+    }
 }
 
 // MARK: - 导出 / 合并 / 应用

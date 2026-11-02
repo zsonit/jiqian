@@ -127,7 +127,134 @@ struct SyncView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            card {
+            permissionCard
+            syncStatusCard
+        }
+    }
+
+    // MARK: 权限卡片（创建者可写；加入者默认只读，可申请编辑权限）
+
+    private var permissionCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 10) {
+                if sync.canEdit {
+                    HStack(spacing: 8) {
+                        Image(systemName: "pencil.and.list.clipboard")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Pal.brand)
+                        Text("本机权限：可编辑")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(Pal.ink)
+                        Spacer()
+                    }
+                    Text("这台手机可以正常记录胎动和宫缩，改动会同步给所有配对的手机")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Pal.ink3)
+                        .lineSpacing(3)
+                    requestsList
+                } else {
+                    HStack(spacing: 8) {
+                        Image(systemName: "eye")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Pal.ink2)
+                        Text("查看模式")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(Pal.ink)
+                        Spacer()
+                    }
+                    Text("只能查看同步过来的记录，无法修改对方的数据。想修改请在下面申请编辑权限，对方同意后即可记录。")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Pal.ink3)
+                        .lineSpacing(3)
+                    if hasRequested {
+                        Button {
+                            run { sync.cancelEditPermission() }
+                        } label: {
+                            Text("已申请，等待对方同意 · 点按撤销申请")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(Pal.brand)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Pal.brandSoft))
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button {
+                            run { sync.requestEditPermission() }
+                        } label: {
+                            Text("申请编辑权限")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Pal.brand))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 写端看到的待审批列表
+    @ViewBuilder
+    private var requestsList: some View {
+        let reqs = sync.acl?.req ?? []
+        if !reqs.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("编辑权限申请")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Pal.ink)
+                ForEach(reqs, id: \.id) { req in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("设备 \(req.id)")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(Pal.ink)
+                            Text(reqTime(req.t))
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(Pal.ink3)
+                        }
+                        Spacer()
+                        Button {
+                            run { sync.grantWriter(req.id) }
+                        } label: {
+                            Text("同意")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(Pal.brand))
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            run { sync.denyRequest(req.id) }
+                        } label: {
+                            Text("忽略")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(Pal.ink2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    private var hasRequested: Bool {
+        sync.acl?.req.contains { $0.id == myDeviceID } ?? false
+    }
+
+    private var myDeviceID: String { SyncManager.shared.deviceID }
+
+    private func reqTime(_ ms: Int64) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return "申请于 " + f.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
+    }
+
+    private var syncStatusCard: some View {
                 VStack(spacing: 12) {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
@@ -171,8 +298,6 @@ struct SyncView: View {
                         .foregroundStyle(Pal.ink3)
                         .multilineTextAlignment(.center)
                 }
-            }
-        }
     }
 
     private var lastSyncText: String {
@@ -184,7 +309,7 @@ struct SyncView: View {
 
     private var notesCard: some View {
         card {
-            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
+            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
                 .font(.system(size: 11))
                 .foregroundStyle(Pal.ink3)
                 .lineSpacing(3)

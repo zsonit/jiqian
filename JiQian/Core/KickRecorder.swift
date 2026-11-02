@@ -19,8 +19,10 @@ enum KickRecorder {
     static var roundLength: TimeInterval { Double(Prefs.roundMin) * 60 }
 
     /// 到点自动翻轮：结束超时轮次并立即开启下一轮（持续循环，直到手动结束）。
+    /// 只读模式（查看端）不翻轮：等写端的数据同步过来即可。
     @discardableResult
     static func rolloverIfNeeded(at date: Date = Date()) throws -> Bool {
+        guard SyncManager.shared.canEdit else { return false }
         let ctx = JiQianStore.context
         guard let current = try activeSession(in: ctx) else { return false }
         guard date.timeIntervalSince(current.startedAt) >= roundLength else { return false }
@@ -52,6 +54,10 @@ enum KickRecorder {
 
     @discardableResult
     static func record(source: RecordSource, at date: Date = Date()) throws -> KickOutcome {
+        // 只读模式（查看端）：记录按钮、快捷指令一律拦截，数据只从写端同步过来
+        guard SyncManager.shared.canEdit else {
+            return KickOutcome(saved: false, duplicate: false, count: 0, target: Prefs.target, sessionStart: nil)
+        }
         let ctx = JiQianStore.context
         let all = try ctx.fetch(FetchDescriptor<KickEvent>(sortBy: [SortDescriptor(\.occurredAt, order: .reverse)]))
         if let last = all.first,
@@ -96,6 +102,11 @@ enum KickRecorder {
     @discardableResult
     static func startNewSession(source: RecordSource, at date: Date = Date()) throws -> KickSession {
         let ctx = JiQianStore.context
+        // 只读模式：不落库。已有进行中的轮次就返回它，否则只给一个不保存的占位对象
+        guard SyncManager.shared.canEdit else {
+            if let current = try activeSession(in: ctx) { return current }
+            return KickSession(startedAt: date, targetCount: Prefs.target, source: source)
+        }
         if let current = try activeSession(in: ctx) {
             current.endedAt = date
             current.finishedReason = "replaced"
@@ -110,6 +121,7 @@ enum KickRecorder {
     }
 
     static func endActiveSession(reason: String = "manual") throws {
+        guard SyncManager.shared.canEdit else { return }
         let ctx = JiQianStore.context
         guard let current = try activeSession(in: ctx) else { return }
         current.endedAt = Date()
@@ -120,6 +132,7 @@ enum KickRecorder {
 
     @discardableResult
     static func undoLast() throws -> Bool {
+        guard SyncManager.shared.canEdit else { return false }
         let ctx = JiQianStore.context
         guard let current = try activeSession(in: ctx) else { return false }
         let list = try events(of: current.id, in: ctx)
@@ -134,6 +147,7 @@ enum KickRecorder {
     }
 
     static func markUsual(_ lessThanUsual: Bool) throws {
+        guard SyncManager.shared.canEdit else { return }
         let ctx = JiQianStore.context
         guard let current = try activeSession(in: ctx) else { return }
         current.lessThanUsualRaw = lessThanUsual ? 1 : 0

@@ -36,6 +36,9 @@ object SyncManager {
     private const val KEY_REV = "last_rev"
     private const val KEY_CL = "cl"
     private const val KEY_DEL = "del"
+    private const val KEY_ACL = "acl"
+    /** 只读端「申请/撤销申请」、写端「同意/忽略」后的待推送标记 */
+    private const val KEY_ACL_DIRTY = "acl_dirty"
     /** iOS 会话原始数组 {"ks":[...],"cs":[...]}：安卓不解析，透传保存让 iOS 端合并 */
     private const val KEY_EXTRA = "extra"
     /// 前台自动检查间隔：对端改完后最多这么久就能看到
@@ -75,15 +78,159 @@ object SyncManager {
         private set
     var lastSyncAt by mutableStateOf(0L)
         private set
+    /** 本机是否可修改数据（未配对=可写；配对后在 writers 里=可写，否则只读） */
+    var canEdit by mutableStateOf(true)
+        private set
+
+    /** 「创建配对码」待登记：首次同步时把本机登记为 owner（可写） */
+    @Volatile private var pendingOwnerAcl = false
 
     val pairedCode: String?
         get() = prefs()?.getString(KEY_CODE, null)
+
+    // MARK: 权限（acl）
+    //
+    // 权限表存在加密快照里随数据同步：owner = 创建配对码的设备；writers = 允许修改；
+    // req = 待审批的「申请编辑权限」列表。合并规则与 iOS 一致（owner 以云端为准、
+    // writers 并集、req 并集减去已授权），保证各端算出同一结果、不会互推死循环。
+
+    private fun storedAcl(): JSONObject? {
+        val s = prefs()?.getString(KEY_ACL, null) ?: return null
+        return runCatching { JSONObject(s) }.getOrNull()
+    }
+
+    private fun saveAcl(acl: JSONObject?) {
+        val p = prefs() ?: return
+        if (acl == null) p.edit().remove(KEY_ACL).apply()
+        else p.edit().putString(KEY_ACL, acl.toString()).apply()
+    }
+
+    private fun isAclDirty(): Boolean = prefs()?.getBoolean(KEY_ACL_DIRTY, false) ?: false
+
+    private fun setAclDirty(v: Boolean) {
+        prefs()?.edit()?.putBoolean(KEY_ACL_DIRTY, v)?.apply()
+    }
+
+    /** 计算本机可写性：未配对=可写；没有 acl=旧版配对全员可写；有 acl 必须在 writers 里 */
+    private fun computeCanEdit(): Boolean {
+        if (pairedCode == null) return true
+        val acl = storedAcl() ?: return true
+        val me = deviceId()
+        return acl.optString("owner") == me || acl.optJSONArray("writers")?.let { arr ->
+            (0 until arr.length()).any { arr.optString(it) == me }
+        } ?: false
+    }
+
+    /** 同步后刷新 UI 可观察的权限状态 */
+    private fun refreshAccess(acl: JSONObject?) {
+        saveAcl(acl)
+        canEdit = computeCanEdit()
+    }
+
+    /** 本机设备标识（权限列表里展示用） */
+    fun deviceId(): String {        val p = prefs() ?: return "unknown"
+        var id = p.getString(KEY_DEVICE, null)
+        if (id == null) {
+            id = UUID.randomUUID().toString().substring(0, 8).uppercase()
+            p.edit().putString(KEY_DEVICE, id).apply()
+        }
+        return id
+    }
+
+    /** 读取本机权限表（UI 展示用） */
+    fun storedAclPublic(): JSONObject? = storedAcl()
+
+    // MARK: 权限申请（只读端发起，写端审批）
+
+    /** 只读端：申请编辑权限（把自己的设备加进待审批列表） */
+    fun requestEditPermission(): SyncResult {
+        if (pairedCode == null) return SyncResult(false, "尚未配对")
+        if (computeCanEdit()) return SyncResult(true, "本机已可修改数据")
+        val acl = storedAcl() ?: JSONObject().put("owner", "").put("writers", JSONArray()).put("req", JSONArray())
+        val req = JSONArray()
+        var exists = false
+        acl.optJSONArray("req")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") == deviceId()) { exists = true }
+                else req.put(o)
+            }
+        }
+        req.put(JSONObject().put("id", deviceId()).put("t", System.currentTimeMillis()))
+        acl.put("req", req)
+        saveAcl(acl)
+        setAclDirty(true)
+        val r = syncNow(manual = true)
+        return if (r.ok) SyncResult(true, if (exists) "已更新申请，等对方在「配对同步」里同意" else "已发出申请，等对方在「配对同步」里同意") else r
+    }
+
+    /** 只读端：撤销申请 */
+    fun cancelEditPermission(): SyncResult {
+        if (pairedCode == null) return SyncResult(false, "尚未配对")
+        val acl = storedAcl() ?: return SyncResult(true, "没有待审批的申请")
+        val req = JSONArray()
+        acl.optJSONArray("req")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != deviceId()) req.put(o)
+            }
+        }
+        acl.put("req", req)
+        saveAcl(acl)
+        setAclDirty(true)
+        val r = syncNow(manual = true)
+        return if (r.ok) SyncResult(true, "已撤销申请") else r
+    }
+
+    /** 写端：同意某台设备的编辑权限申请 */
+    fun grantWriter(id: String): SyncResult {
+        if (!computeCanEdit()) return SyncResult(false, "本机没有审批权限")
+        val acl = storedAcl() ?: return SyncResult(false, "没有待审批的申请")
+        val writers = JSONArray()
+        acl.optJSONArray("writers")?.let { old ->
+            for (i in 0 until old.length()) writers.put(old.optString(i))
+        }
+        if (!writers.toString().contains("\"$id\"")) writers.put(id)
+        acl.put("writers", writers)
+        val req = JSONArray()
+        acl.optJSONArray("req")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != id) req.put(o)
+            }
+        }
+        acl.put("req", req)
+        saveAcl(acl)
+        setAclDirty(true)
+        val r = syncNow(manual = true)
+        return if (r.ok) SyncResult(true, "已同意，对方约 6 秒内获得修改权限") else r
+    }
+
+    /** 写端：忽略某台设备的申请（对方之后可再次申请） */
+    fun denyRequest(id: String): SyncResult {
+        if (!computeCanEdit()) return SyncResult(false, "本机没有审批权限")
+        val acl = storedAcl() ?: return SyncResult(false, "没有待审批的申请")
+        val req = JSONArray()
+        acl.optJSONArray("req")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != id) req.put(o)
+            }
+        }
+        acl.put("req", req)
+        saveAcl(acl)
+        setAclDirty(true)
+        val r = syncNow(manual = true)
+        return if (r.ok) SyncResult(true, "已忽略该申请") else r
+    }
 
     fun bootstrap(context: Context) {
         if (appContext != null) return
         appContext = context.applicationContext
         lastSyncAt = prefs()?.getLong(KEY_LAST_SYNC, 0L) ?: 0L
         lastRev = prefs()?.getLong(KEY_REV, 0L) ?: 0L
+        // 启动即恢复权限状态（不等首次同步）
+        canEdit = computeCanEdit()
         // 启动后拉一次云端（延迟几秒，避开启动高峰）
         if (pairedCode != null) {
             mainHandler.postDelayed({ Thread { syncNow(manual = false) }.start() }, 4000)
@@ -140,26 +287,18 @@ object SyncManager {
 
     private fun prefs() = appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    private fun deviceId(): String {
-        val p = prefs() ?: return "unknown"
-        var id = p.getString(KEY_DEVICE, null)
-        if (id == null) {
-            id = UUID.randomUUID().toString().substring(0, 8).uppercase()
-            p.edit().putString(KEY_DEVICE, id).apply()
-        }
-        return id
-    }
-
     // MARK: 本机标记（清空时间戳 / 删除墓碑）
 
     private fun cl(): Long = prefs()?.getLong(KEY_CL, 0L) ?: 0L
 
     private fun markCleared() {
+        if (!computeCanEdit()) return
         prefs()?.edit()?.putLong(KEY_CL, System.currentTimeMillis())?.apply()
     }
 
-    /** 撤销等单条删除：写墓碑，让对端也删掉同一条（id 约定见 SyncTombstone 注释）。供 Store 调用 */
+    /** 撤销等单条删除：写墓碑，让对端也删掉同一条（id 约定见 SyncTombstone 注释）。供 Store 调用。只读端不允许 */
     fun addTombstone(id: String) {
+        if (!computeCanEdit()) return
         val p = prefs() ?: return
         val arr = JSONArray(p.getString(KEY_DEL, "[]"))
         for (i in 0 until arr.length()) {
@@ -203,7 +342,15 @@ object SyncManager {
             val exists = codeExists(code)
             if (exists == false) {
                 prefs()?.edit()?.putString(KEY_CODE, code)?.remove(KEY_SALT)?.apply()
+                // 本机是创建者：立即登记为 owner（可写），加入的设备默认只读。
+                // 先落本地再同步，即使首次推送失败，owner 身份也不会丢
+                saveAcl(JSONObject()
+                    .put("owner", deviceId())
+                    .put("writers", JSONArray().put(deviceId()))
+                    .put("req", JSONArray()))
+                pendingOwnerAcl = true
                 val r = syncNow(manual = true)
+                pendingOwnerAcl = false
                 return if (r.ok) SyncResult(true, "配对码 $code 已就绪") else r
             }
         }
@@ -228,9 +375,12 @@ object SyncManager {
         prefs()?.edit()
             ?.remove(KEY_CODE)?.remove(KEY_SALT)
             ?.remove(KEY_REV)?.remove(KEY_LAST_SYNC)
+            ?.remove(KEY_ACL)?.remove(KEY_ACL_DIRTY)
             ?.apply()
+        pendingOwnerAcl = false
         lastSyncAt = 0
         lastMessage = null
+        canEdit = true
         localDirty = false
         lastRev = 0L
         pollHandler.removeCallbacks(pollRunnable)
@@ -240,6 +390,8 @@ object SyncManager {
     // MARK: 触发（Store 每次落库后调用）
 
     fun onDataChanged() {
+        // 只读端：本机改动一律不上传（记录入口也已被拦截，这里是兜底）
+        if (!computeCanEdit()) return
         localDirty = true
         // 正在同步：记一笔，等这一轮结束立刻补跑（否则这次改动会被丢掉）
         if (busy) {
@@ -304,6 +456,14 @@ object SyncManager {
         snap.put("cs", ex.optJSONArray("cs") ?: JSONArray())
         snap.put("cl", cl())
         snap.put("del", tombstones())
+        // 权限表随快照加密同步（创建者首次同步时由 pendingOwnerAcl 登记）
+        storedAcl()?.let { snap.put("acl", it) }
+        if (pendingOwnerAcl && storedAcl() == null) {
+            snap.put("acl", JSONObject()
+                .put("owner", deviceId())
+                .put("writers", JSONArray().put(deviceId()))
+                .put("req", JSONArray()))
+        }
         return snap
     }
 
@@ -404,6 +564,43 @@ object SyncManager {
         val rcs = remote.optJSONArray("cs")
         out.put("cs", if (rcs != null && rcs.length() > 0) rcs else (local.optJSONArray("cs") ?: JSONArray()))
 
+        // 权限表合并（与 iOS SyncACLResolver 一致）：owner 以云端为准、writers 并集、申请并集减去已授权
+        val la = local.optJSONObject("acl")
+        val ra = remote.optJSONObject("acl")
+        if (la == null && ra == null && !pendingOwnerAcl) {
+            // 旧版配对：无权限表，全员可写
+        } else {
+            val owner = ra?.optString("owner").takeUnless { it.isNullOrEmpty() }
+                ?: la?.optString("owner").takeUnless { it.isNullOrEmpty() }
+                ?: if (pendingOwnerAcl) deviceId() else ""
+            val writers = linkedSetOf<String>()
+            la?.optJSONArray("writers")?.let { arr -> for (i in 0 until arr.length()) writers.add(arr.optString(i)) }
+            ra?.optJSONArray("writers")?.let { arr -> for (i in 0 until arr.length()) writers.add(arr.optString(i)) }
+            if (owner.isNotEmpty()) writers.add(owner)
+            val reqMap = linkedMapOf<String, Long>()
+            (la?.optJSONArray("req") ?: JSONArray()).let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id")
+                    reqMap[id] = maxOf(reqMap[id] ?: 0L, o.optLong("t", 0L))
+                }
+            }
+            (ra?.optJSONArray("req") ?: JSONArray()).let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id")
+                    reqMap[id] = maxOf(reqMap[id] ?: 0L, o.optLong("t", 0L))
+                }
+            }
+            val req = JSONArray()
+            reqMap.entries.filter { it.key !in writers }.sortedBy { it.value }.forEach { (id, t) ->
+                req.put(JSONObject().put("id", id).put("t", t))
+            }
+            out.put("acl", JSONObject()
+                .put("owner", owner)
+                .put("writers", JSONArray().apply { writers.sorted().forEach { put(it) } })
+                .put("req", req))
+        }
         return out
     }
 
@@ -433,6 +630,8 @@ object SyncManager {
             ?.putLong(KEY_CL, snap.optLong("cl", 0L))
             ?.putString(KEY_DEL, pruneTombstones(snap.optJSONArray("del") ?: JSONArray()).toString())
             ?.apply()
+        // 权限表随快照落地，并刷新可写状态（被授权/被批准时立即生效）
+        snap.optJSONObject("acl")?.let { refreshAccess(it) }
     }
 
     // MARK: 同步主链路
@@ -442,7 +641,8 @@ object SyncManager {
         val code = pairedCode
         if (context == null || code == null) return SyncResult(false, "尚未配对")
         val local = localSnapshot()
-        if (snapshotEmpty(local)) {
+        val hasAclToPush = pendingOwnerAcl || local.optJSONObject("acl") != null
+        if (snapshotEmpty(local) && !hasAclToPush) {
             // 本机没数据：只拉不推，避免把空数据盖掉对方
             val remote = fetchRemote(code)
                 ?: return if (manual) SyncResult(false, "网络不可用") else SyncResult(false, "")
@@ -461,6 +661,7 @@ object SyncManager {
                 return SyncResult(false, resp.message)
             }
             applySnapshot(remote.state)
+            refreshAccess(remote.state.optJSONObject("acl"))
             markSynced()
             lastMessage = "已拉取对方记录"
             return SyncResult(true, "已拉取对方记录")
@@ -475,28 +676,49 @@ object SyncManager {
                 AppLog.w(msg)
                 return SyncResult(false, msg)
             }
+            val localCanEdit = computeCanEdit()
             var merged = local
             // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
             var mustPush = localDirty || lastRev == 0L || remote?.updatedBy == EMPTY
             if (remote != null) {
                 merged = mergeSnapshots(local, remote.state)
+                // 审批/申请操作本身也要推一次，即使没有记录改动
+                if (localCanEdit && isAclDirty() &&
+                    merged.optJSONObject("acl").toString() != local.optJSONObject("acl").toString()) {
+                    mustPush = true
+                }
                 if (merged.toString() != local.toString()) {
                     applySnapshot(merged)
                     mustPush = true
                 }
             }
+            // 只读端：本机记录改动一律不推；只有「申请/撤销申请」或首次加入占行时才推，
+            // 且推送内容里记录部分原样用云端版本（只更新 acl），保证只读端改不了云端数据
+            if (!localCanEdit) {
+                val aclNeedsPush = isAclDirty() &&
+                    merged.optJSONObject("acl").toString() != remote?.state?.optJSONObject("acl").toString()
+                mustPush = lastRev == 0L || remote?.updatedBy == EMPTY || aclNeedsPush
+            }
             if (!mustPush) {
                 // 本机没改、云端也没新东西：什么都不推，避免两端互相蹭出无限推送
+                refreshAccess(merged.optJSONObject("acl"))
                 lastMessage = "已是最新"
                 return SyncResult(true, "已是最新")
             }
-            val resp = upsert(code, merged)
+            var pushSnapshot = merged
+            if (!localCanEdit && remote != null && remote.updatedBy != EMPTY) {
+                pushSnapshot = remote.state
+                merged.optJSONObject("acl")?.let { pushSnapshot.put("acl", it) }
+            }
+            val resp = upsert(code, pushSnapshot)
             if (!resp.ok) {
                 lastMessage = if (manual) "推送失败：${resp.message}" else null
                 AppLog.w("推送失败：${resp.message}")
                 return SyncResult(false, "推送失败：${resp.message}")
             }
             localDirty = false
+            setAclDirty(false)
+            refreshAccess(merged.optJSONObject("acl"))
             markSynced()
             val mergedNew = remote != null && merged.toString() != local.toString()
             lastMessage = if (mergedNew) "已同步（收到对方的新记录）" else "已同步"
