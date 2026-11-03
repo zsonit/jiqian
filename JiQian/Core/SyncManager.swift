@@ -36,6 +36,8 @@ final class SyncManager: ObservableObject {
     private static let keyACL = "jq_sync_acl"
     /// 只读端「申请/撤销申请」、写端「同意/忽略」后的待推送标记
     private static let keyACLDirty = "jq_sync_acl_dirty"
+    /// 已经提醒过的申请设备（同一台设备只提醒一次，重复申请才再提醒一次）
+    private static let keyNotifiedReqs = "jq_sync_acl_notified"
     /// 前台自动检查间隔：对端改完后最多这么久就能看到
     private static let pollInterval: TimeInterval = 6
     /// 本机改动后的防抖：够快、又能合并连续输入
@@ -75,8 +77,11 @@ final class SyncManager: ObservableObject {
         // 启动即恢复权限状态（不等首次同步）
         acl = storedACL()
         canEdit = computeCanEdit()
-        // 启动后拉一次云端（延迟几秒，避开启动高峰）
+        // 通知代理要在最早的时机装上，否则点通知打不开对应页面
+        SyncNotifier.shared.prepare()
         if Self.defaults.string(forKey: Self.keyCode) != nil {
+            SyncNotifier.shared.requestAuthorization()
+            // 启动后拉一次云端（延迟几秒，避开启动高峰）
             DispatchQueue.global().asyncAfter(deadline: .now() + 4) { [weak self] in
                 _ = self?.syncNow(manual: false)
             }
@@ -231,6 +236,22 @@ final class SyncManager: ObservableObject {
             self.acl = newACL
             self.canEdit = self.computeCanEdit()
         }
+        notifyIfNewRequests(newACL)
+    }
+
+    /// 写端（可编辑方）：发现新的编辑权限申请时发一条本地通知。
+    /// 同一台设备只提醒一次；申请被处理掉（同意/忽略）后，再次申请会重新提醒。
+    private func notifyIfNewRequests(_ newACL: SyncSnapshot.ACL?) {
+        guard computeCanEdit() else { return }
+        let reqIDs = (newACL?.req ?? []).map(\.id).filter { $0 != deviceId }
+        let notified = Set(Self.defaults.stringArray(forKey: Self.keyNotifiedReqs) ?? [])
+        let fresh = reqIDs.filter { !notified.contains($0) }
+        if !fresh.isEmpty {
+            AppLog.i("Notify", "新的编辑权限申请：\(fresh.joined(separator: ","))")
+            SyncNotifier.shared.notifyPermissionRequests(fresh)
+        }
+        // 只保留仍待审批的，之后重新申请还能再提醒
+        Self.defaults.set(reqIDs, forKey: Self.keyNotifiedReqs)
     }
 
     // MARK: 权限申请（只读端发起，写端审批）
@@ -296,6 +317,8 @@ final class SyncManager: ObservableObject {
                 // 先落本地再同步，即使首次推送失败，owner 身份也不会丢
                 saveACL(SyncSnapshot.ACL(owner: deviceId, writers: [deviceId], req: []))
                 pendingOwnerAcl = true
+                // 以后有人申请编辑权限要能提醒到这台手机
+                SyncNotifier.shared.requestAuthorization()
                 let r = syncNow(manual: true)
                 pendingOwnerAcl = false
                 return r.ok ? SyncOutcome(ok: true, message: "配对码 \(code) 已就绪") : r
@@ -323,6 +346,7 @@ final class SyncManager: ObservableObject {
         }
         Self.defaults.set(code, forKey: Self.keyCode)
         Self.defaults.removeObject(forKey: Self.keySalt)
+        SyncNotifier.shared.requestAuthorization()
         let r = syncNow(manual: true)
         return r.ok ? SyncOutcome(ok: true, message: "配对成功：\(code)") : r
     }
@@ -341,6 +365,7 @@ final class SyncManager: ObservableObject {
         Self.defaults.removeObject(forKey: Self.keyRev)
         Self.defaults.removeObject(forKey: Self.keyACL)
         Self.defaults.removeObject(forKey: Self.keyACLDirty)
+        Self.defaults.removeObject(forKey: Self.keyNotifiedReqs)
         pendingOwnerAcl = false
         localDirty = false
         lastRev = 0
@@ -465,6 +490,8 @@ final class SyncManager: ObservableObject {
             return SyncOutcome(ok: true, message: "已拉取对方记录")
         }
 
+        // 本次同步开始时的权限表：同步期间用户可能又点了申请/审批，收尾时要保住那次改动
+        let aclAtStart = storedACL()
         let remoteSnapshot = fetchRemote(code: code)
         if let snapshot = remoteSnapshot, snapshot.updatedBy == Self.undecryptable {
             // 解密不了多半是两端密钥/配对码对不上，此时绝不能拿本机数据覆盖云端，否则另一端会被清空
@@ -504,7 +531,8 @@ final class SyncManager: ObservableObject {
 
         // 本机没改、云端也没新东西：什么都不推，避免两端互相蹭出无限推送
         if !mustPush {
-            refreshAccess(merged.acl)
+            // 同步途中本机权限表被改过（点了申请/审批）：以本机为准，别被合并结果盖掉
+            refreshAccess(storedACL() == aclAtStart ? merged.acl : storedACL())
             DispatchQueue.main.async { self.lastMessage = "已是最新" }
             return SyncOutcome(ok: true, message: "已是最新")
         }
@@ -529,8 +557,16 @@ final class SyncManager: ObservableObject {
             return SyncOutcome(ok: false, message: msg)
         }
         localDirty = false
-        Self.defaults.set(false, forKey: Self.keyACLDirty)
-        refreshAccess(merged.acl)
+        if storedACL() == aclAtStart {
+            // 本机权限表在同步期间没被动过：用合并结果落地，并清掉待推送标记
+            Self.defaults.set(false, forKey: Self.keyACLDirty)
+            refreshAccess(merged.acl)
+        } else {
+            // 同步途中又点了「申请 / 撤销 / 同意」：保留本机这次改动，立刻补推一轮
+            Self.defaults.set(true, forKey: Self.keyACLDirty)
+            refreshAccess(storedACL())
+            retryPending = true
+        }
         markSynced()
         let msg = (remoteSnapshot != nil && merged != local) ? "已同步（收到对方的新记录）" : "已同步"
         DispatchQueue.main.async { self.lastMessage = msg }

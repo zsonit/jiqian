@@ -173,7 +173,33 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         SyncManager.bootstrap(applicationContext)
+        SyncNotifier.ensureChannel(applicationContext)
+        // 已配对才申请通知权限（有人申请编辑权限时要能提醒到）
+        if (SyncManager.pairedCode != null) requestNotifyPermission()
+        handleIntent(intent)
         setContent { App() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** 点「有设备申请编辑权限」的通知进来：直接打开配对同步页 */
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(SyncNotifier.EXTRA_OPEN_SYNC, false) == true) {
+            intent.removeExtra(SyncNotifier.EXTRA_OPEN_SYNC)
+            SyncManager.requestOpenSync()
+        }
+    }
+
+    private fun requestNotifyPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
     }
 
     override fun onResume() {
@@ -191,6 +217,11 @@ class MainActivity : ComponentActivity() {
 fun App() {
     var tab by remember { mutableStateOf(0) }
     var showSync by remember { mutableStateOf(false) }
+    val openSyncTick = SyncManager.openSyncTick
+    // 点通知进来：直接打开配对同步页
+    LaunchedEffect(openSyncTick) {
+        if (openSyncTick > 0) showSync = true
+    }
     MaterialTheme(
         colorScheme = lightColorScheme(primary = Brand, background = Bg, surface = Bg)
     ) {
@@ -203,6 +234,24 @@ fun App() {
                         fontSize = 11.sp, color = Ink2,
                         modifier = Modifier.fillMaxWidth().background(BrandSoft).padding(horizontal = 16.dp, vertical = 6.dp)
                     )
+                }
+                // 有人申请编辑权限：常驻横幅，点一下直接进审批页
+                val reqs = SyncManager.pendingReqs
+                if (SyncManager.pairedCode != null && SyncManager.canEdit && reqs.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().background(Brand).clickable { showSync = true }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("🔔", fontSize = 12.sp)
+                        Text(
+                            if (reqs.size == 1) "设备 ${reqs[0].first} 申请编辑权限 · 点此审批"
+                            else "${reqs.size} 台设备申请编辑权限 · 点此审批",
+                            fontSize = 11.sp, color = Color.White, maxLines = 1,
+                            modifier = Modifier.weight(1f).padding(start = 6.dp)
+                        )
+                        Text("›", fontSize = 15.sp, color = Color.White)
+                    }
                 }
                 Box(Modifier.weight(1f)) {
                     when {
@@ -501,6 +550,17 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
                 Text("☁️", fontSize = 16.sp)
                 Text("配对同步", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.padding(start = 8.dp))
                 Spacer(Modifier.weight(1f))
+                if (SyncManager.canEdit && SyncManager.pendingReqs.isNotEmpty()) {
+                    // 有人申请编辑权限：红色角标，一眼能看到
+                    Text(
+                        "${SyncManager.pendingReqs.size} 待审批",
+                        fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = Color.White,
+                        modifier = Modifier
+                            .background(Danger, RoundedCornerShape(9.dp))
+                            .padding(horizontal = 7.dp, vertical = 2.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
                 Text(
                     SyncManager.pairedCode?.let {
                         if (SyncManager.canEdit) "已配对 ${it.take(3)}···" else "已配对 ${it.take(3)}···（查看）"
@@ -575,7 +635,7 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.7 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v4.8 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = if (wipeKind == "kicks") "胎动" else "宫缩"

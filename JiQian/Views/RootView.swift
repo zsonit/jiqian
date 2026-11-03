@@ -1,9 +1,17 @@
 import SwiftUI
 import SwiftData
+import Combine
 
 struct RootView: View {
     @State private var tab: Int = 0
+    @State private var showSyncSheet = false
     @ObservedObject private var sync = SyncManager.shared
+
+    /// 待我审批的编辑权限申请（本机可编辑时才有）
+    private var pendingRequests: [SyncSnapshot.ACL.Req] {
+        guard sync.canEdit else { return [] }
+        return sync.acl?.req ?? []
+    }
 
     var body: some View {
         ZStack {
@@ -16,22 +24,63 @@ struct RootView: View {
         // 页面切换：轻柔淡入上浮，快速到位、不晃眼
         .animation(.easeOut(duration: 0.26), value: tab)
         .safeAreaInset(edge: .top, spacing: 0) {
-            if sync.pairedCode != nil && !sync.canEdit {
-                // 查看模式横幅：这台手机只能看，改不了
-                HStack(spacing: 6) {
-                    Image(systemName: "eye")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("查看模式 · 修改数据需在「设置 → 配对同步」申请权限")
-                        .font(.system(size: 11, weight: .medium))
+            VStack(spacing: 0) {
+                if sync.pairedCode != nil && !sync.canEdit {
+                    // 查看模式横幅：这台手机只能看，改不了
+                    HStack(spacing: 6) {
+                        Image(systemName: "eye")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("查看模式 · 修改数据需在「设置 → 配对同步」申请权限")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(Pal.ink2)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                    .background(Pal.brandSoft)
                 }
-                .foregroundStyle(Pal.ink2)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 5)
-                .background(Pal.brandSoft)
+                if !pendingRequests.isEmpty {
+                    // 有人申请编辑权限：常驻横幅，点一下直接进审批页
+                    Button {
+                        showSyncSheet = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bell.badge.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(pendingRequests.count == 1
+                                 ? "设备 \(pendingRequests[0].id) 申请编辑权限 · 点此审批"
+                                 : "\(pendingRequests.count) 台设备申请编辑权限 · 点此审批")
+                                .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity)
+                        .background(Pal.brand)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GlassTabBar(selection: $tab)
+        }
+        // 点系统通知进来：直接弹审批页
+        .sheet(isPresented: $showSyncSheet) {
+            NavigationStack {
+                SyncView()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") { showSyncSheet = false }
+                        }
+                    }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .jiqianOpenSync)) { _ in
+            showSyncSheet = true
         }
         .tint(Pal.brand)
         .onOpenURL { url in

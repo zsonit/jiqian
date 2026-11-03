@@ -125,11 +125,14 @@ fun SyncScreen(onClose: () -> Unit) {
             }
 
             Spacer(Modifier.height(12.dp))
+            // 订阅权限表版本，申请/审批后列表立即刷新
+            val aclVersion = SyncManager.aclVersion
+            val acl = remember(aclVersion) { SyncManager.storedAclPublic() }
             PermissionCard(
                 canEdit = SyncManager.canEdit,
-                hasRequested = SyncManager.storedAclPublic()?.optJSONArray("req")
+                hasRequested = acl?.optJSONArray("req")
                     ?.let { arr -> (0 until arr.length()).any { arr.optJSONObject(it)?.optString("id") == SyncManager.deviceId() } } ?: false,
-                requests = SyncManager.storedAclPublic()?.optJSONArray("req")?.let { arr ->
+                requests = acl?.optJSONArray("req")?.let { arr ->
                     (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
                 } ?: emptyList(),
                 onRequest = { run { SyncManager.requestEditPermission() } },
@@ -178,6 +181,7 @@ fun SyncScreen(onClose: () -> Unit) {
             Text(
                 "* 一个配对码可以加到多部手机，大家看到的是同一份记录\n" +
                     "* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n" +
+                    "* 对方申请编辑权限时，这台手机会弹通知，页面顶部也会出现「点此审批」横幅\n" +
                     "* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n" +
                     "* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n" +
                     "* 各自新增的记录都会保留；同一处改动，后改的生效\n" +

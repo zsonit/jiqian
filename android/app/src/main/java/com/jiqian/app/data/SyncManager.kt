@@ -39,6 +39,8 @@ object SyncManager {
     private const val KEY_ACL = "acl"
     /** 只读端「申请/撤销申请」、写端「同意/忽略」后的待推送标记 */
     private const val KEY_ACL_DIRTY = "acl_dirty"
+    /** 已经提醒过的申请设备（同一台设备只提醒一次，重复申请才再提醒） */
+    private const val KEY_ACL_NOTIFIED = "acl_notified"
     /** iOS 会话原始数组 {"ks":[...],"cs":[...]}：安卓不解析，透传保存让 iOS 端合并 */
     private const val KEY_EXTRA = "extra"
     /// 前台自动检查间隔：对端改完后最多这么久就能看到
@@ -81,6 +83,15 @@ object SyncManager {
     /** 本机是否可修改数据（未配对=可写；配对后在 writers 里=可写，否则只读） */
     var canEdit by mutableStateOf(true)
         private set
+    /** 待我审批的编辑权限申请（设备号 + 申请时间）；本机只读时为空 */
+    var pendingReqs by mutableStateOf<List<Pair<String, Long>>>(emptyList())
+        private set
+    /** 点通知要求打开「配对同步」页：每次自增，UI 监听变化即可 */
+    var openSyncTick by mutableStateOf(0)
+        private set
+    /** 权限表版本号：每次落盘自增，界面据此刷新申请列表 */
+    var aclVersion by mutableStateOf(0)
+        private set
 
     /** 「创建配对码」待登记：首次同步时把本机登记为 owner（可写） */
     @Volatile private var pendingOwnerAcl = false
@@ -103,6 +114,8 @@ object SyncManager {
         val p = prefs() ?: return
         if (acl == null) p.edit().remove(KEY_ACL).apply()
         else p.edit().putString(KEY_ACL, acl.toString()).apply()
+        // 让界面能订阅到权限表变化（申请列表、可写状态）
+        aclVersion += 1
     }
 
     private fun isAclDirty(): Boolean = prefs()?.getBoolean(KEY_ACL_DIRTY, false) ?: false
@@ -121,10 +134,37 @@ object SyncManager {
         } ?: false
     }
 
-    /** 同步后刷新 UI 可观察的权限状态 */
+    /** 同步后刷新 UI 可观察的权限状态；写端发现新申请时发本地通知 */
     private fun refreshAccess(acl: JSONObject?) {
         saveAcl(acl)
         canEdit = computeCanEdit()
+        val reqs = pendingFrom(acl)
+        pendingReqs = reqs
+        // 写端：新出现的申请提醒一次（同一台设备不重复提醒）
+        val notified = (prefs()?.getString(KEY_ACL_NOTIFIED, "") ?: "")
+            .split(",").filter { it.isNotEmpty() }.toSet()
+        val fresh = reqs.map { it.first }.filter { it !in notified }
+        if (canEdit && fresh.isNotEmpty()) {
+            AppLog.i("新的编辑权限申请：${fresh.joinToString(",")}")
+            appContext?.let { SyncNotifier.notifyRequests(it, fresh) }
+        }
+        // 只保留仍待审批的，之后重新申请还能再提醒
+        prefs()?.edit()?.putString(KEY_ACL_NOTIFIED, reqs.joinToString(",") { it.first })?.apply()
+    }
+
+    /** 权限表里待审批的申请（排除本机自己），按申请时间排序 */
+    private fun pendingFrom(acl: JSONObject?): List<Pair<String, Long>> {
+        val out = mutableListOf<Pair<String, Long>>()
+        acl?.optJSONArray("req")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("id")
+                if (id.isNotEmpty() && id != deviceId()) {
+                    out.add(id to o.optLong("t", 0L))
+                }
+            }
+        }
+        return out.sortedBy { it.second }
     }
 
     /** 本机设备标识（权限列表里展示用） */
@@ -229,8 +269,8 @@ object SyncManager {
         appContext = context.applicationContext
         lastSyncAt = prefs()?.getLong(KEY_LAST_SYNC, 0L) ?: 0L
         lastRev = prefs()?.getLong(KEY_REV, 0L) ?: 0L
-        // 启动即恢复权限状态（不等首次同步）
-        canEdit = computeCanEdit()
+        // 启动即恢复权限状态（不等首次同步），顺便提醒还没审批的申请
+        refreshAccess(storedAcl())
         // 启动后拉一次云端（延迟几秒，避开启动高峰）
         if (pairedCode != null) {
             mainHandler.postDelayed({ Thread { syncNow(manual = false) }.start() }, 4000)
@@ -375,12 +415,13 @@ object SyncManager {
         prefs()?.edit()
             ?.remove(KEY_CODE)?.remove(KEY_SALT)
             ?.remove(KEY_REV)?.remove(KEY_LAST_SYNC)
-            ?.remove(KEY_ACL)?.remove(KEY_ACL_DIRTY)
+            ?.remove(KEY_ACL)?.remove(KEY_ACL_DIRTY)?.remove(KEY_ACL_NOTIFIED)
             ?.apply()
         pendingOwnerAcl = false
         lastSyncAt = 0
         lastMessage = null
         canEdit = true
+        pendingReqs = emptyList()
         localDirty = false
         lastRev = 0L
         pollHandler.removeCallbacks(pollRunnable)
@@ -414,6 +455,11 @@ object SyncManager {
             return
         }
         Thread { syncNow(manual = false) }.start()
+    }
+
+    /** 点了「有设备申请编辑权限」的通知：让界面跳到配对同步页 */
+    fun requestOpenSync() {
+        openSyncTick += 1
     }
 
     // MARK: 快照构建（Store ↔ 互通 JSON）
@@ -640,6 +686,8 @@ object SyncManager {
         val context = appContext
         val code = pairedCode
         if (context == null || code == null) return SyncResult(false, "尚未配对")
+        // 本次同步开始时的权限表：同步期间用户可能又点了申请/审批，收尾时要保住那次改动
+        val aclAtStart = prefs()?.getString(KEY_ACL, null)
         val local = localSnapshot()
         val hasAclToPush = pendingOwnerAcl || local.optJSONObject("acl") != null
         if (snapshotEmpty(local) && !hasAclToPush) {
@@ -701,7 +749,11 @@ object SyncManager {
             }
             if (!mustPush) {
                 // 本机没改、云端也没新东西：什么都不推，避免两端互相蹭出无限推送
-                refreshAccess(merged.optJSONObject("acl"))
+                // 同步途中若本机权限表被改过（点了申请/审批），以本机为准，别被合并结果盖掉
+                refreshAccess(
+                    if (prefs()?.getString(KEY_ACL, null) == aclAtStart) merged.optJSONObject("acl")
+                    else storedAcl()
+                )
                 lastMessage = "已是最新"
                 return SyncResult(true, "已是最新")
             }
@@ -717,8 +769,16 @@ object SyncManager {
                 return SyncResult(false, "推送失败：${resp.message}")
             }
             localDirty = false
-            setAclDirty(false)
-            refreshAccess(merged.optJSONObject("acl"))
+            if (prefs()?.getString(KEY_ACL, null) == aclAtStart) {
+                // 权限表在同步期间没被动过：用合并结果落地，并清掉待推送标记
+                setAclDirty(false)
+                refreshAccess(merged.optJSONObject("acl"))
+            } else {
+                // 同步途中又点了「申请 / 撤销 / 同意」：保留本机这次改动，立刻补推一轮
+                setAclDirty(true)
+                refreshAccess(storedAcl())
+                retryPending = true
+            }
             markSynced()
             val mergedNew = remote != null && merged.toString() != local.toString()
             lastMessage = if (mergedNew) "已同步（收到对方的新记录）" else "已同步"

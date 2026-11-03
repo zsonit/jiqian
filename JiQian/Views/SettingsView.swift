@@ -104,6 +104,15 @@ struct SettingsView: View {
                                 .foregroundStyle(Pal.brand)
                             Text("配对同步")
                             Spacer()
+                            if pendingCount > 0 {
+                                // 有人申请编辑权限：红点角标，进来看得到
+                                Text("\(pendingCount) 待审批")
+                                    .font(.system(size: 10.5, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2.5)
+                                    .background(Capsule().fill(Pal.danger))
+                            }
                             Text(syncStatusText)
                                 .font(.caption)
                                 .foregroundStyle(Pal.ink2)
@@ -190,6 +199,12 @@ struct SettingsView: View {
             return sync.canEdit ? "已配对 \(code.prefix(3))···" : "已配对 \(code.prefix(3))···（查看）"
         }
         return "未配对"
+    }
+
+    /// 待我审批的编辑权限申请数量（只读端没有审批权，不显示）
+    private var pendingCount: Int {
+        guard sync.canEdit else { return 0 }
+        return sync.acl?.req.count ?? 0
     }
 
     private func binding(for tag: String) -> Binding<Bool> {
