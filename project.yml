@@ -26,8 +26,12 @@ targets:
       properties:
         CFBundleDisplayName: 胎动记录
         CFBundleName: JiQian
-        CFBundleShortVersionString: "4.8"
-        CFBundleVersion: "48"
+        CFBundleShortVersionString: "4.9"
+        CFBundleVersion: "49"
+        CFBundleURLTypes:
+          - CFBundleURLName: com.jiqian.app
+            CFBundleURLSchemes:
+              - jiqian
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -44,12 +48,15 @@ targets:
         CFBundleLocalizations:
           - zh-Hans
           - en
+    dependencies:
+      - target: JiQianWidgets
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jiqian.app
         PRODUCT_NAME: JiQian
-        MARKETING_VERSION: "4.8"
-        CURRENT_PROJECT_VERSION: "48"
+        MARKETING_VERSION: "4.9"
+        CURRENT_PROJECT_VERSION: "49"
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
@@ -59,3 +66,32 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
     scheme:
       gatherCoverageData: false
+
+  # 锁屏 / 桌面组件：两个可点的开关（胎动、宫缩）
+  JiQianWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Widget
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: 胎动组件
+        CFBundleShortVersionString: "4.9"
+        CFBundleVersion: "49"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jiqian.app.widgets
+        PRODUCT_NAME: JiQianWidgets
+        MARKETING_VERSION: "4.9"
+        CURRENT_PROJECT_VERSION: "49"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        SWIFT_EMIT_LOC_STRINGS: NO
+        GENERATE_INFOPLIST_FILE: NO

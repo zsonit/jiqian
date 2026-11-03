@@ -5,6 +5,8 @@ import Combine
 struct RootView: View {
     @State private var tab: Int = 0
     @State private var showSyncSheet = false
+    @State private var quickToast: String?
+    @State private var toastToken = UUID()
     @ObservedObject private var sync = SyncManager.shared
 
     /// 待我审批的编辑权限申请（本机可编辑时才有）
@@ -82,10 +84,44 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .jiqianOpenSync)) { _ in
             showSyncSheet = true
         }
+        // 锁屏 / 桌面组件点按进来的结果提示
+        .overlay(alignment: .bottom) {
+            if let quickToast {
+                Text(quickToast)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+                    .background(Capsule().fill(Pal.brand.opacity(0.96)))
+                    .shadow(color: Pal.brand.opacity(0.30), radius: 12, x: 0, y: 5)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 92)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         .tint(Pal.brand)
         .onOpenURL { url in
-            if url.host == "summary" { tab = 1 }
-            if url.host == "kick" { tab = 0 }
+            if url.host == "summary" { tab = 1; return }
+            if url.host == "kick" { tab = 0; return }
+            // 组件开关：立刻落库，并把结果提示出来
+            if let action = QuickAction(url: url) {
+                tab = action.pageIndex
+                let feedback = QuickActions.run(action)
+                toast(feedback.text)
+            }
+        }
+    }
+
+    @MainActor
+    private func toast(_ text: String) {
+        let token = UUID()
+        toastToken = token
+        withAnimation(.easeOut(duration: 0.18)) { quickToast = text }
+        Task {
+            try? await Task.sleep(nanoseconds: 2_400_000_000)
+            guard toastToken == token else { return }
+            withAnimation(.easeIn(duration: 0.22)) { quickToast = nil }
         }
     }
 

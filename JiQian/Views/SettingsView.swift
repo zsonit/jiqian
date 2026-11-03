@@ -124,6 +124,23 @@ struct SettingsView: View {
                     Text("用 6 位配对码把这台手机和家人的手机连起来，记录端到端加密后自动双向同步。不配对则一切只存本机。")
                 }
 
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        guideLine("1", "长按锁屏空白处 → 自定义 → 锁定屏幕 → 添加小组件")
+                        guideLine("2", "在组件列表里搜「胎动」，选「胎动 · 锁屏开关」或「宫缩 · 锁屏开关」")
+                        guideLine("3", "桌面组件：长按桌面空白处 → 左上角「+」→ 搜「胎动」→ 选「胎动 / 宫缩 快捷开关」")
+                        Text("两个开关各自独立：点「胎动」记一次，点「宫缩」开始计时、再点一下结束保存。点完会直接打开 App 完成记录并给出提示。")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Pal.ink3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 2)
+                } header: {
+                    Text("锁屏 / 桌面组件")
+                } footer: {
+                    Text("组件只做入口，记录仍然写在本机（配对时同时加密同步），不会上传到任何第三方。")
+                }
+
                 Section("产科联系方式") {
                     TextField("机构名称", text: $provider)
                         .textInputAutocapitalization(.never)
@@ -199,6 +216,22 @@ struct SettingsView: View {
             return sync.canEdit ? "已配对 \(code.prefix(3))···" : "已配对 \(code.prefix(3))···（查看）"
         }
         return "未配对"
+    }
+
+    /// 组件添加步骤的一行：序号圆点 + 说明
+    private func guideLine(_ index: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(index)
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 17, height: 17)
+                .background(Circle().fill(Pal.brand))
+            Text(text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Pal.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
     }
 
     /// 待我审批的编辑权限申请数量（只读端没有审批权，不显示）

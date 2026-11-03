@@ -116,13 +116,32 @@ JiQian/
     SyncCrypto.swift            端到端加密：PBKDF2(10万轮) + AES-256-GCM
     SyncSnapshot.swift          互通快照：SwiftData ↔ JSON、记录级合并
     SyncManager.swift           配对同步引擎：防抖推送 + 6 秒轮询 + 墓碑
+    QuickAction.swift           组件点按落库：jiqian://quick-kick / quick-contraction
   Intents/JiQianIntents.swift   App Intents + App Shortcuts 注册
   Views/                        首页 / 胎动 / 宫缩 / 摘要 / 动作 / 设置 / 配对同步
+Widget/                         锁屏组件 + 桌面组件（WidgetKit Extension）
 .github/workflows/build-ipa.yml 云端编译流水线
 ```
 
 安卓端对应：`android/app/src/main/java/com/jiqian/app/`
 `data/`（CloudCfg / SyncCrypto / SyncManager，与 iOS 同算法同信封同快照格式）、`ui/SyncScreen.kt`（配对界面）。
+
+---
+
+## 锁屏 / 桌面组件（v4.9，iOS）
+
+三个组件，都在 Widget Extension（`JiQianWidgets`）里，各自独立添加：
+
+| 组件 | 支持的尺寸 | 点一下会发生什么 |
+|---|---|---|
+| 胎动 · 锁屏开关 | 锁屏圆形 / 长条 / 单行文字 | 立刻记一次胎动 |
+| 宫缩 · 锁屏开关 | 锁屏圆形 / 长条 / 单行文字 | 没在计时就开始；正在计时就结束并保存 |
+| 胎动 / 宫缩 快捷开关 | 桌面小号 / 中号 | 两个并排的开关，分别触发上面的动作 |
+
+- 添加路径：锁屏长按 → 自定义 → 锁定屏幕 → 添加小组件 → 搜「胎动」；桌面长按 → 左上角「+」→ 搜「胎动」。设置页也有同样三步指引。
+- **实现方式**：组件用 `Link` 打开 `jiqian://quick-kick` / `jiqian://quick-contraction`，App 在 `onOpenURL` 里立刻落库（走与界面按钮完全相同的记录器），底部弹出「已记下第 N 次胎动」「已保存本次宫缩 1:12」之类的结果提示。因此组件不需要 App Group、也不需要共享数据库，自签名安装不会因为权限配置失败。
+- 只读端（查看模式）点组件同样会被拦截，提示去申请编辑权限。
+- 为什么组件上不显示今日次数：那需要 App（主 App 容器）与扩展（Extension 容器）共享数据，也就是 App Group 能力——免费 Apple ID 签名不支持 App Group。等有付费开发者账号时可以补上实时数字。
 
 ---
 
@@ -157,7 +176,7 @@ JiQian/
 
 ## 已知限制
 
-- 没有 Live Activity 扩展：灵动岛/锁屏实时计时需要额外的 Widget Extension target，会显著增加自签名复杂度（多一个 bundle id 与 profile）。留在 v1.1。
+- 没有 Live Activity：灵动岛/锁屏实时跳动计时还没做（v4.9 已有锁屏与桌面组件，但组件上不显示实时秒数）。
 - 配对同步需要联网；不配对时一切只存本机，行为与 v4.5 完全一致。
 - 编辑权限申请的提醒不是服务器推送：只读端发出申请后，可编辑端的 App 在前台时约 6 秒内弹通知；若 App 已在后台被系统挂起，则要等它回到前台（或重新打开）时才会提醒——云端数据仍在，不会丢。真正的后台实时推送需要 APNs / FCM 服务端，超出当前无账号、纯本地架构的范围。
 - 没有 HealthKit 写入。
