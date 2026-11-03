@@ -261,7 +261,9 @@ final class SyncManager: ObservableObject {
         guard pairedCode != nil else { return SyncOutcome(ok: false, message: "尚未配对") }
         guard !computeCanEdit() else { return SyncOutcome(ok: true, message: "本机已可修改数据") }
         var aclv = storedACL() ?? SyncSnapshot.ACL(owner: "", writers: [], req: [])
-        let t = SnapshotIO.ms(Date())
+        // 之前撤销过也要能重新申请：时间必须比那条撤销记录新
+        let t = SyncACLResolver.revokeTime(requester: deviceId, in: aclv)
+        aclv.rv.removeAll { $0.id == deviceId }
         aclv.req.removeAll { $0.id == deviceId }
         aclv.req.append(SyncSnapshot.ACL.Req(id: deviceId, t: t))
         aclv.req.sort { $0.t < $1.t }
@@ -271,22 +273,27 @@ final class SyncManager: ObservableObject {
         return r.ok ? SyncOutcome(ok: true, message: "已发出申请，等对方在「配对同步」里同意") : r
     }
 
-    /// 只读端：撤销申请
+    /// 只读端：撤销申请（写一条撤销记录，否则两端合并会把申请并回来）
     func cancelEditPermission() -> SyncOutcome {
         guard pairedCode != nil else { return SyncOutcome(ok: false, message: "尚未配对") }
         guard var aclv = storedACL() else { return SyncOutcome(ok: true, message: "没有待审批的申请") }
+        let had = aclv.req.contains { $0.id == deviceId }
+        let t = SyncACLResolver.revokeTime(requester: deviceId, in: aclv)
         aclv.req.removeAll { $0.id == deviceId }
+        aclv.rv.removeAll { $0.id == deviceId }
+        aclv.rv.append(SyncSnapshot.ACL.Req(id: deviceId, t: t))
         saveACL(aclv)
         Self.defaults.set(true, forKey: Self.keyACLDirty)
         let r = syncNow(manual: true)
-        return r.ok ? SyncOutcome(ok: true, message: "已撤销申请") : r
+        guard r.ok else { return r }
+        return SyncOutcome(ok: true, message: had ? "已撤销申请" : "没有待审批的申请")
     }
 
     /// 写端：同意某台设备的编辑权限申请
     func grantWriter(_ deviceID: String) -> SyncOutcome {
         guard computeCanEdit() else { return SyncOutcome(ok: false, message: "本机没有审批权限") }
         guard var aclv = storedACL() else { return SyncOutcome(ok: false, message: "没有待审批的申请") }
-        aclv.writers.append(deviceID)
+        if !aclv.writers.contains(deviceID) { aclv.writers.append(deviceID) }
         aclv.req.removeAll { $0.id == deviceID }
         saveACL(aclv)
         Self.defaults.set(true, forKey: Self.keyACLDirty)
@@ -294,11 +301,14 @@ final class SyncManager: ObservableObject {
         return r.ok ? SyncOutcome(ok: true, message: "已同意，对方约 6 秒内获得修改权限") : r
     }
 
-    /// 写端：忽略某台设备的申请（对方之后可再次申请）
+    /// 写端：忽略某台设备的申请（写撤销记录，对方之后仍可再次申请）
     func denyRequest(_ deviceID: String) -> SyncOutcome {
         guard computeCanEdit() else { return SyncOutcome(ok: false, message: "本机没有审批权限") }
         guard var aclv = storedACL() else { return SyncOutcome(ok: false, message: "没有待审批的申请") }
+        let t = SyncACLResolver.revokeTime(requester: deviceID, in: aclv)
         aclv.req.removeAll { $0.id == deviceID }
+        aclv.rv.removeAll { $0.id == deviceID }
+        aclv.rv.append(SyncSnapshot.ACL.Req(id: deviceID, t: t))
         saveACL(aclv)
         Self.defaults.set(true, forKey: Self.keyACLDirty)
         let r = syncNow(manual: true)
@@ -509,8 +519,10 @@ final class SyncManager: ObservableObject {
             merged.acl = SyncACLResolver.merge(local: local.acl,
                                                remote: snapshot.state.acl,
                                                pendingOwner: pendingOwnerAcl ? deviceId : nil)
-            // 审批/申请操作本身也要推一次（写端），即使没有记录改动
-            if computeCanEdit() && isAclDirty() && merged.acl != local.acl { mustPush = true }
+            // 申请 / 撤销申请 / 审批本身要推一次：只要本机权限表和云端不一致就推。
+            // 不能只比较「合并结果 vs 本机旧值」，撤销时合并结果可能正好等于本机旧值，
+            // 那样这一轮就不会推送，对方永远看不到撤销
+            if isAclDirty() && merged.acl != snapshot.state.acl { mustPush = true }
             if merged != local {
                 do {
                     try SnapshotIO.apply(merged, to: ctx)

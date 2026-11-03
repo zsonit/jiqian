@@ -362,7 +362,17 @@ fun KickScreen() {
 
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-            TextButton(onClick = { Store.removeLastKick(ctx); tick++ }) { Text("撤销上一次", color = Ink2) }
+            TextButton(onClick = {
+                // 以前点了没反应（查看模式被拦截时静默返回）：这里明确告诉用户为什么
+                if (!SyncManager.canEdit) {
+                    Toast.makeText(ctx, "查看模式不能改记录，去「设置 → 配对同步」申请权限", Toast.LENGTH_SHORT).show()
+                } else if (Store.kicks(ctx).isEmpty()) {
+                    Toast.makeText(ctx, "还没有可以撤销的记录", Toast.LENGTH_SHORT).show()
+                } else {
+                    Store.removeLastKick(ctx)
+                    tick++
+                }
+            }) { Text("撤销上一次", color = Ink2) }
         }
 
         Spacer(Modifier.height(12.dp))

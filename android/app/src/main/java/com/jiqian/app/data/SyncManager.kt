@@ -50,6 +50,8 @@ object SyncManager {
     /// 墓碑过期时间：180 天，防止无限增长
     private const val TOMBSTONE_TTL = 180L * 86_400_000L
     private const val TOMBSTONE_CAP = 2000
+    /// 撤销申请记录上限（与 iOS 一致）
+    private const val RV_CAP = 200
     /// fetchRemote 的解密失败标记
     private const val UNDECRYPTABLE = "undecryptable"
     /// 云端还没有这一行的标记
@@ -120,6 +122,30 @@ object SyncManager {
 
     private fun isAclDirty(): Boolean = prefs()?.getBoolean(KEY_ACL_DIRTY, false) ?: false
 
+    /**
+     * 权限表规范化字符串：与键序/数组顺序无关，用来判断「本机权限表和云端是否一致」。
+     * JSONObject.toString() 受插入顺序影响，不能直接比较
+     */
+    private fun aclKey(acl: JSONObject?): String {
+        if (acl == null) return ""
+        val writers = mutableListOf<String>()
+        acl.optJSONArray("writers")?.let { arr ->
+            for (i in 0 until arr.length()) writers.add(arr.optString(i))
+        }
+        fun items(name: String): String {
+            val out = mutableListOf<String>()
+            acl.optJSONArray(name)?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    out.add(o.optString("id") + ":" + o.optLong("t", 0L))
+                }
+            }
+            return out.sorted().joinToString(",")
+        }
+        return acl.optString("owner") + "|" + writers.sorted().joinToString(",") +
+            "|" + items("req") + "|" + items("rv")
+    }
+
     private fun setAclDirty(v: Boolean) {
         prefs()?.edit()?.putBoolean(KEY_ACL_DIRTY, v)?.apply()
     }
@@ -180,6 +206,50 @@ object SyncManager {
     /** 读取本机权限表（UI 展示用） */
     fun storedAclPublic(): JSONObject? = storedAcl()
 
+    /**
+     * 撤销时刻 = 「对应申请时间 + 1ms」，两端时钟有偏差也不会让撤销失效；
+     * 重新申请时同样用它保证比撤销记录更新
+     */
+    private fun revokeTime(acl: JSONObject?, requester: String): Long {
+        var base = 0L
+        acl?.optJSONArray("req")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optString("id") == requester) base = maxOf(base, o.optLong("t", 0L))
+            }
+        }
+        acl?.optJSONArray("rv")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optString("id") == requester) base = maxOf(base, o.optLong("t", 0L))
+            }
+        }
+        return maxOf(System.currentTimeMillis(), base + 1)
+    }
+
+    /** 写一条撤销记录（本机放弃申请 / 写端忽略申请），并移除待审批项 */
+    private fun markRevoked(acl: JSONObject, requester: String): JSONObject {
+        val t = revokeTime(acl, requester)
+        val req = JSONArray()
+        acl.optJSONArray("req")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != requester) req.put(o)
+            }
+        }
+        val rv = JSONArray()
+        acl.optJSONArray("rv")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != requester) rv.put(o)
+            }
+        }
+        rv.put(JSONObject().put("id", requester).put("t", t))
+        acl.put("req", req)
+        acl.put("rv", rv)
+        return acl
+    }
+
     // MARK: 权限申请（只读端发起，写端审批）
 
     /** 只读端：申请编辑权限（把自己的设备加进待审批列表） */
@@ -196,30 +266,39 @@ object SyncManager {
                 else req.put(o)
             }
         }
-        req.put(JSONObject().put("id", deviceId()).put("t", System.currentTimeMillis()))
+        // 撤销过也要能重新申请：时间必须比那条撤销记录新
+        req.put(JSONObject().put("id", deviceId()).put("t", revokeTime(acl, deviceId())))
         acl.put("req", req)
+        // 本机这一条撤销记录已经不起作用了，顺手清掉
+        val rv = JSONArray()
+        acl.optJSONArray("rv")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != deviceId()) rv.put(o)
+            }
+        }
+        acl.put("rv", rv)
         saveAcl(acl)
         setAclDirty(true)
         val r = syncNow(manual = true)
         return if (r.ok) SyncResult(true, if (exists) "已更新申请，等对方在「配对同步」里同意" else "已发出申请，等对方在「配对同步」里同意") else r
     }
 
-    /** 只读端：撤销申请 */
+    /** 只读端：撤销申请（写撤销记录，否则两端合并会把申请并回来） */
     fun cancelEditPermission(): SyncResult {
         if (pairedCode == null) return SyncResult(false, "尚未配对")
         val acl = storedAcl() ?: return SyncResult(true, "没有待审批的申请")
-        val req = JSONArray()
+        var had = false
         acl.optJSONArray("req")?.let { old ->
             for (i in 0 until old.length()) {
-                val o = old.optJSONObject(i) ?: continue
-                if (o.optString("id") != deviceId()) req.put(o)
+                if (old.optJSONObject(i)?.optString("id") == deviceId()) had = true
             }
         }
-        acl.put("req", req)
+        markRevoked(acl, deviceId())
         saveAcl(acl)
         setAclDirty(true)
         val r = syncNow(manual = true)
-        return if (r.ok) SyncResult(true, "已撤销申请") else r
+        return if (r.ok) SyncResult(true, if (had) "已撤销申请" else "没有待审批的申请") else r
     }
 
     /** 写端：同意某台设备的编辑权限申请 */
@@ -246,18 +325,11 @@ object SyncManager {
         return if (r.ok) SyncResult(true, "已同意，对方约 6 秒内获得修改权限") else r
     }
 
-    /** 写端：忽略某台设备的申请（对方之后可再次申请） */
+    /** 写端：忽略某台设备的申请（写撤销记录，对方之后仍可再次申请） */
     fun denyRequest(id: String): SyncResult {
         if (!computeCanEdit()) return SyncResult(false, "本机没有审批权限")
         val acl = storedAcl() ?: return SyncResult(false, "没有待审批的申请")
-        val req = JSONArray()
-        acl.optJSONArray("req")?.let { old ->
-            for (i in 0 until old.length()) {
-                val o = old.optJSONObject(i) ?: continue
-                if (o.optString("id") != id) req.put(o)
-            }
-        }
-        acl.put("req", req)
+        markRevoked(acl, id)
         saveAcl(acl)
         setAclDirty(true)
         val r = syncNow(manual = true)
@@ -638,14 +710,37 @@ object SyncManager {
                     reqMap[id] = maxOf(reqMap[id] ?: 0L, o.optLong("t", 0L))
                 }
             }
-            val req = JSONArray()
-            reqMap.entries.filter { it.key !in writers }.sortedBy { it.value }.forEach { (id, t) ->
-                req.put(JSONObject().put("id", id).put("t", t))
+            // 撤销并集：撤销（本机放弃 / 被忽略）过就压住更早的申请。
+            // 少了这一步，「撤销申请」会被并集原样并回来 —— 点了等于没点
+            val rvMap = linkedMapOf<String, Long>()
+            (la?.optJSONArray("rv") ?: JSONArray()).let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id")
+                    rvMap[id] = maxOf(rvMap[id] ?: 0L, o.optLong("t", 0L))
+                }
             }
+            (ra?.optJSONArray("rv") ?: JSONArray()).let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id")
+                    rvMap[id] = maxOf(rvMap[id] ?: 0L, o.optLong("t", 0L))
+                }
+            }
+            val rvCutoff = System.currentTimeMillis() - TOMBSTONE_TTL
+            val rvKept = rvMap.entries.filter { it.value >= rvCutoff }.sortedBy { it.value }.takeLast(RV_CAP)
+            val rv = JSONArray()
+            rvKept.forEach { rv.put(JSONObject().put("id", it.key).put("t", it.value)) }
+            val req = JSONArray()
+            reqMap.entries
+                .filter { it.key !in writers && (rvMap[it.key] ?: 0L) < it.value }
+                .sortedBy { it.value }
+                .forEach { (id, t) -> req.put(JSONObject().put("id", id).put("t", t)) }
             out.put("acl", JSONObject()
                 .put("owner", owner)
                 .put("writers", JSONArray().apply { writers.sorted().forEach { put(it) } })
-                .put("req", req))
+                .put("req", req)
+                .put("rv", rv))
         }
         return out
     }
@@ -730,9 +825,11 @@ object SyncManager {
             var mustPush = localDirty || lastRev == 0L || remote?.updatedBy == EMPTY
             if (remote != null) {
                 merged = mergeSnapshots(local, remote.state)
-                // 审批/申请操作本身也要推一次，即使没有记录改动
-                if (localCanEdit && isAclDirty() &&
-                    merged.optJSONObject("acl").toString() != local.optJSONObject("acl").toString()) {
+                // 申请 / 撤销申请 / 审批本身要推一次：只要本机权限表和云端不一致就推。
+                // 不能只比较「合并结果 vs 本机旧值」，撤销时合并结果可能正好等于本机旧值，
+                // 那样这一轮就不会推送，对方永远看不到撤销
+                if (isAclDirty() &&
+                    aclKey(merged.optJSONObject("acl")) != aclKey(remote.state.optJSONObject("acl"))) {
                     mustPush = true
                 }
                 if (merged.toString() != local.toString()) {
@@ -744,7 +841,7 @@ object SyncManager {
             // 且推送内容里记录部分原样用云端版本（只更新 acl），保证只读端改不了云端数据
             if (!localCanEdit) {
                 val aclNeedsPush = isAclDirty() &&
-                    merged.optJSONObject("acl").toString() != remote?.state?.optJSONObject("acl").toString()
+                    aclKey(merged.optJSONObject("acl")) != aclKey(remote?.state?.optJSONObject("acl"))
                 mustPush = lastRev == 0L || remote?.updatedBy == EMPTY || aclNeedsPush
             }
             if (!mustPush) {

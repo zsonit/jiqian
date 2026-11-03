@@ -62,11 +62,32 @@ struct SyncSnapshot: Codable, Equatable {
     struct ACL: Codable, Equatable {
         struct Req: Codable, Equatable {
             var id: String    // 申请设备的 deviceId
-            var t: Int64      // 申请时间（毫秒），用于排序展示
+            var t: Int64      // 申请时间（毫秒），用于排序展示 / 撤销比较
         }
         var owner: String
         var writers: [String] = []
         var req: [Req] = []
+        /// 已撤销（本机放弃）或被忽略的申请：id + 撤销时刻。
+        /// 没有它，「撤销申请」会被两端并集合并规则原样并回来，表现就是点了没反应。
+        var rv: [Req] = []
+
+        enum CodingKeys: String, CodingKey { case owner, writers, req, rv }
+
+        init(owner: String, writers: [String] = [], req: [Req] = [], rv: [Req] = []) {
+            self.owner = owner
+            self.writers = writers
+            self.req = req
+            self.rv = rv
+        }
+
+        /// 手写解码：rv 是后加的字段，旧快照里没有，必须能缺省
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            owner = try c.decodeIfPresent(String.self, forKey: .owner) ?? ""
+            writers = try c.decodeIfPresent([String].self, forKey: .writers) ?? []
+            req = try c.decodeIfPresent([Req].self, forKey: .req) ?? []
+            rv = try c.decodeIfPresent([Req].self, forKey: .rv) ?? []
+        }
     }
 
     var v: Int = 1
@@ -96,6 +117,17 @@ enum SyncTombstone {
 // MARK: - 权限（acl）合并 —— 两端规则一致，保证收敛
 
 enum SyncACLResolver {
+    /// 撤销记录保留 180 天（与墓碑一致），之后自动修剪
+    static let revokeTTLms: Int64 = 180 * 86400 * 1000
+    private static let revokeCap = 200
+
+    /// 撤销时刻用「对应申请时间 + 1ms」：两端时钟有偏差也不会让撤销失效
+    static func revokeTime(requester: String, in acl: SyncSnapshot.ACL?) -> Int64 {
+        let reqT = acl?.req.first { $0.id == requester }?.t ?? 0
+        let rvT = acl?.rv.first { $0.id == requester }?.t ?? 0
+        return max(SnapshotIO.ms(Date()), max(reqT, rvT) + 1)
+    }
+
     static func merge(local: SyncSnapshot.ACL?, remote: SyncSnapshot.ACL?, pendingOwner: String?) -> SyncSnapshot.ACL? {
         if local == nil && remote == nil {
             guard let owner = pendingOwner else { return nil }
@@ -104,17 +136,30 @@ enum SyncACLResolver {
         // 归属以云端（远端）为准；两端都没有时用本端待登记的创建者
         let owner = remote?.owner ?? local?.owner ?? pendingOwner ?? ""
         var writers = Set((local?.writers ?? []) + (remote?.writers ?? []))
-        writers.insert(owner)
-        // 申请并集（同设备保留最新时间），已授权的从申请里移除
+        if !owner.isEmpty { writers.insert(owner) }
+        // 申请并集（同设备保留最新时间）
         var reqMap: [String: Int64] = [:]
         for q in (local?.req ?? []) + (remote?.req ?? []) {
             reqMap[q.id] = max(reqMap[q.id] ?? 0, q.t)
         }
+        // 撤销并集：撤销过就压住更早的申请，否则并集会把已撤销的申请又并回来
+        var rvMap: [String: Int64] = [:]
+        for q in (local?.rv ?? []) + (remote?.rv ?? []) {
+            rvMap[q.id] = max(rvMap[q.id] ?? 0, q.t)
+        }
+        let cutoff = SnapshotIO.ms(Date()) - revokeTTLms
+        let rv = rvMap
+            .filter { $0.value >= cutoff }
+            .sorted { $0.value < $1.value }
+            .suffix(revokeCap)
+            .map { SyncSnapshot.ACL.Req(id: $0.key, t: $0.value) }
+        let rvSet = Dictionary(uniqueKeysWithValues: rv.map { ($0.id, $0.t) })
+        // 未被授权、且没有被更新的一次撤压倒的申请才算待审批
         let req = reqMap
-            .filter { !writers.contains($0.key) }
+            .filter { !writers.contains($0.key) && (rvSet[$0.key] ?? 0) < $0.value }
             .sorted { $0.value < $1.value }
             .map { SyncSnapshot.ACL.Req(id: $0.key, t: $0.value) }
-        return SyncSnapshot.ACL(owner: owner, writers: writers.sorted(), req: req)
+        return SyncSnapshot.ACL(owner: owner, writers: writers.sorted(), req: req, rv: rv)
     }
 }
 

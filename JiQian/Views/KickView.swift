@@ -8,6 +8,8 @@ struct KickView: View {
     @AppStorage(PrefKey.phone) private var phone: String = ""
 
     @State private var showEndConfirm = false
+    /// 撤销失败时的提示（查看模式 / 本轮没有记录）
+    @State private var hint: String?
 
     private var active: KickSession? {
         sessions.first(where: { $0.endedAt == nil })
@@ -38,6 +40,21 @@ struct KickView: View {
         }
         .navigationTitle("胎动")
         .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) {
+            if let hint {
+                Text(hint)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Capsule().fill(Color.black.opacity(0.78)))
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 96)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now in
             // 到点自动收尾本轮并无缝开启下一轮
             _ = try? KickRecorder.rolloverIfNeeded(at: now)
@@ -111,7 +128,15 @@ struct KickView: View {
         HStack(spacing: 10) {
             BigButton(title: "撤销最近一次", style: .ghost) {
                 let ok = (try? KickRecorder.undoLast()) ?? false
-                if ok { Haptic.soft() } else { Haptic.warning() }
+                if ok {
+                    Haptic.soft()
+                } else {
+                    Haptic.warning()
+                    // 以前是静默失败，用户以为按钮坏了：这里说清楚为什么撤销不了
+                    showHint(SyncManager.shared.canEdit
+                             ? "本轮还没有可以撤销的记录"
+                             : "查看模式不能改记录，去「设置 → 配对同步」申请权限")
+                }
             }
             BigButton(title: "结束本轮", style: .ghost) {
                 showEndConfirm = true
@@ -272,6 +297,16 @@ struct KickView: View {
         }
     }
 
+
+    /// 一条短暂的操作提示（撤销失败等）
+    @MainActor
+    private func showHint(_ text: String) {
+        withAnimation(.easeOut(duration: 0.16)) { hint = text }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_400_000_000)
+            withAnimation(.easeIn(duration: 0.2)) { hint = nil }
+        }
+    }
 
     private func record() {
         do {
