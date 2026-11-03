@@ -128,9 +128,11 @@ Widget/                         锁屏组件 + 桌面组件（WidgetKit Extensio
 
 ---
 
-## 锁屏 / 桌面组件（v4.9，iOS）
+## 锁屏 / 桌面组件（v4.9，双端）
 
-三个组件，都在 Widget Extension（`JiQianWidgets`）里，各自独立添加：
+### iOS：Widget Extension（`JiQianWidgets`）
+
+三个组件，各自独立添加：
 
 | 组件 | 支持的尺寸 | 点一下会发生什么 |
 |---|---|---|
@@ -142,6 +144,21 @@ Widget/                         锁屏组件 + 桌面组件（WidgetKit Extensio
 - **实现方式**：组件用 `Link` 打开 `jiqian://quick-kick` / `jiqian://quick-contraction`，App 在 `onOpenURL` 里立刻落库（走与界面按钮完全相同的记录器），底部弹出「已记下第 N 次胎动」「已保存本次宫缩 1:12」之类的结果提示。因此组件不需要 App Group、也不需要共享数据库，自签名安装不会因为权限配置失败。
 - 只读端（查看模式）点组件同样会被拦截，提示去申请编辑权限。
 - 为什么组件上不显示今日次数：那需要 App（主 App 容器）与扩展（Extension 容器）共享数据，也就是 App Group 能力——免费 Apple ID 签名不支持 App Group。等有付费开发者账号时可以补上实时数字。
+
+### 安卓：RemoteViews 桌面组件（`com.jiqian.app.widget`）
+
+安卓从 5.0 起系统层面取消了锁屏组件，所以只做桌面组件——但因为是同一进程、同一份 SharedPreferences，**组件上的数字是真实的、点击就地生效，不用打开 App**：
+
+| 组件 | 尺寸 | 显示 | 点一下 |
+|---|---|---|---|
+| 胎动 · 记一下 | 2×2 | 今日次数 / 上次时间 / 本轮次数 | 记一次胎动 |
+| 宫缩 · 计时开关 | 2×2 | 就绪或正在走秒的计时器 | 开始 / 结束并保存 |
+| 胎动 / 宫缩 快捷开关 | 4×2 | 今日与本轮次数 + 上次胎动时间 | 两个开关并排 |
+
+- 添加路径：桌面长按空白处 → 小组件 → 搜「胎动记录」。设置页也有说明。
+- 计时用 `Chronometer` 直接挂在组件上走秒；宫缩的「正在计时」状态存在 SharedPreferences（`ctn_running`），App 与组件共用，App 被杀掉再打开也能接着走。
+- 每次记录后组件原地刷新（`Widgets.refresh`），并走与 App 相同的记录入口（`Store.addKick` / `addContraction`），因此同步、墓碑、只读端拦截全部同样生效。
+- 零新增依赖：只用系统 `RemoteViews`，不引入 Glance，升级时不会带进 Compose 版本冲突。
 
 ---
 

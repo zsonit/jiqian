@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jiqian.app.widget.Widgets
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -50,8 +51,13 @@ object Store {
     private const val KEY_KICKS = "kicks"
     private const val KEY_CONTRACTIONS = "contractions"
     private const val KEY_PREFS = "prefs"
+    private const val KEY_CTN_RUNNING = "ctn_running"
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences("store", Context.MODE_PRIVATE)
+
+    /** 宫缩是否在计时：存本次开始时间（0 = 没在计时）。App 与桌面组件共用这份状态 */
+    fun runningContractionStart(ctx: Context) = sp(ctx).getLong(KEY_CTN_RUNNING, 0L)
+    fun setRunningContractionStart(ctx: Context, v: Long) = sp(ctx).edit().putLong(KEY_CTN_RUNNING, v).apply()
 
     fun kicks(ctx: Context): MutableList<Long> {
         val a = JSONArray(sp(ctx).getString(KEY_KICKS, "[]"))
@@ -67,6 +73,7 @@ object Store {
         val a = JSONArray(); l.forEach { a.put(it) }
         sp(ctx).edit().putString(KEY_KICKS, a.toString()).apply()
         SyncManager.onDataChanged()
+        Widgets.refresh(ctx)
     }
 
     fun removeLastKick(ctx: Context) {
@@ -79,6 +86,7 @@ object Store {
         val a = JSONArray(); l.forEach { a.put(it) }
         sp(ctx).edit().putString(KEY_KICKS, a.toString()).apply()
         SyncManager.onDataChanged()
+        Widgets.refresh(ctx)
     }
 
     fun clearKicks(ctx: Context) {
@@ -87,6 +95,7 @@ object Store {
         kicks(ctx).forEach { SyncManager.addTombstone("ke@$it") }
         sp(ctx).edit().putString(KEY_KICKS, "[]").apply()
         SyncManager.onDataChanged()
+        Widgets.refresh(ctx)
     }
 
     /** 同步引擎专用：整体替换本机数据（不触发 onDataChanged，避免同步循环） */
@@ -94,6 +103,7 @@ object Store {
         val ka = JSONArray(); newKicks.forEach { ka.put(it) }
         val ca = JSONArray(); newCtns.forEach { ca.put(JSONObject().put("s", it.first).put("e", it.second)) }
         sp(ctx).edit().putString(KEY_KICKS, ka.toString()).putString(KEY_CONTRACTIONS, ca.toString()).apply()
+        Widgets.refresh(ctx)
     }
 
     fun contractions(ctx: Context): MutableList<Pair<Long, Long>> {
@@ -109,6 +119,7 @@ object Store {
         val a = JSONArray(); l.forEach { a.put(JSONObject().put("s", it.first).put("e", it.second)) }
         sp(ctx).edit().putString(KEY_CONTRACTIONS, a.toString()).apply()
         SyncManager.onDataChanged()
+        Widgets.refresh(ctx)
     }
 
     fun clearContractions(ctx: Context) {
@@ -117,6 +128,7 @@ object Store {
         contractions(ctx).forEach { SyncManager.addTombstone("ce@${it.first}") }
         sp(ctx).edit().putString(KEY_CONTRACTIONS, "[]").apply()
         SyncManager.onDataChanged()
+        Widgets.refresh(ctx)
     }
 
     fun roundMin(ctx: Context) = sp(ctx).getInt(KEY_PREFS + "roundMin", 60)
@@ -367,8 +379,9 @@ fun KickScreen() {
 @Composable
 fun ContractionScreen() {
     val ctx = LocalContext.current
-    var running by remember { mutableStateOf(false) }
-    var startAt by remember { mutableStateOf(0L) }
+    // 计时状态存进 SharedPreferences：App 被杀掉、或从桌面组件点了开始，都能接上
+    var startAt by remember { mutableStateOf(Store.runningContractionStart(ctx)) }
+    var running by remember { mutableStateOf(startAt > 0L) }
     var tick by remember { mutableStateOf(0) }
     LaunchedEffect(running) { while (running) { kotlinx.coroutines.delay(500); tick++ } }
 
@@ -396,10 +409,12 @@ fun ContractionScreen() {
             onClick = {
                 if (!running) {
                     startAt = System.currentTimeMillis()
+                    Store.setRunningContractionStart(ctx, startAt)
                     running = true
                     Feedback.click(ctx)
                 } else {
                     Store.addContraction(ctx, startAt, System.currentTimeMillis())
+                    Store.setRunningContractionStart(ctx, 0L)
                     running = false
                     Feedback.click(ctx)
                 }
@@ -574,6 +589,22 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
             fontSize = 11.sp, color = Ink2, lineHeight = 15.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
         )
 
+        Spacer(Modifier.height(12.dp))
+        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+            Column(Modifier.padding(16.dp)) {
+                Text("桌面组件", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "长按桌面空白处 → 小组件 → 搜「胎动记录」，可添加：\n" +
+                        "· 胎动 · 记一下（2×2，点一下记一次）\n" +
+                        "· 宫缩 · 计时开关（2×2，点一下开始，再点结束保存）\n" +
+                        "· 胎动 / 宫缩 快捷开关（4×2，两个开关并排）\n" +
+                        "组件上的次数与计时是实时读取的，点完就地刷新，不用打开 App。",
+                    fontSize = 12.sp, color = Ink2, lineHeight = 18.sp
+                )
+            }
+        }
+
         Spacer(Modifier.height(16.dp))
         Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
             Column(Modifier.padding(16.dp)) {
@@ -635,7 +666,7 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.8 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v4.9 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = if (wipeKind == "kicks") "胎动" else "宫缩"

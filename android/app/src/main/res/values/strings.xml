@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">胎动记录</string>
+
+    <!-- 桌面组件（名字会显示在系统的组件选择器里） -->
+    <string name="widget_kick_name">胎动 · 记一下</string>
+    <string name="widget_kick_desc">桌面上点一下，立刻记一次胎动。</string>
+    <string name="widget_ctn_name">宫缩 · 计时开关</string>
+    <string name="widget_ctn_desc">点一下开始宫缩计时，再点一下结束并保存。</string>
+    <string name="widget_combined_name">胎动 / 宫缩 快捷开关</string>
+    <string name="widget_combined_desc">两个开关并排，记录胎动与宫缩都不用先打开 App。</string>
 </resources>
