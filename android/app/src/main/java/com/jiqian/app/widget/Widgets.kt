@@ -12,7 +12,7 @@ import android.widget.RemoteViews
 import com.jiqian.app.MainActivity
 import com.jiqian.app.R
 import com.jiqian.app.Store
-import com.jiqian.app.data.SyncManager
+import com.jiqian.app.SyncManager
 import com.jiqian.app.dayStart
 import java.text.SimpleDateFormat
 import java.util.Date
