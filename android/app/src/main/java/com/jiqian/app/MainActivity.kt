@@ -136,17 +136,9 @@ object Store {
     fun roundMin(ctx: Context) = sp(ctx).getInt(KEY_PREFS + "roundMin", 60)
     fun setRoundMin(ctx: Context, v: Int) = sp(ctx).edit().putInt(KEY_PREFS + "roundMin", v).apply()
 
-    /** 预产期（当天 0 点毫秒，0 = 未设置）与最后修改时间，随配对同步 */
+    /** 预产期（当天 0 点毫秒，0 = 未设置）与最后修改时间的镜像；同步数据源在 SyncManager 的 st */
     fun edd(ctx: Context) = sp(ctx).getLong(KEY_PREFS + "edd", 0L)
     fun eddT(ctx: Context) = sp(ctx).getLong(KEY_PREFS + "eddT", 0L)
-
-    /** 用户手动改预产期：记修改时刻 + 触发同步（查看模式下挡住） */
-    fun setEdd(ctx: Context, ms: Long) {
-        if (!SyncManager.canEdit) return
-        val t = maxOf(System.currentTimeMillis(), sp(ctx).getLong(KEY_PREFS + "eddT", 0L) + 1)
-        sp(ctx).edit().putLong(KEY_PREFS + "edd", ms).putLong(KEY_PREFS + "eddT", t).apply()
-        SyncManager.onDataChanged()
-    }
 
     /** 同步落地：只写不改标记，避免两端互推 */
     fun applyEdd(ctx: Context, ms: Long, t: Long) {
@@ -532,7 +524,7 @@ fun SummaryScreen() {
     sb.append("胎动记录 · ")
     sb.append(if (showAll) "全部" else fmtDay(targetDay))
     // 预产期来自同步设置，孕周按所看那一天算（与 iOS 摘要一致）
-    Store.edd(ctx).takeIf { it > 0L }?.let { sb.append("\n孕周：").append(gestationText(it, targetDay)) }
+    SyncManager.eddMs().takeIf { it > 0L }?.let { sb.append("\n孕周：").append(gestationText(it, targetDay)) }
     sb.append("\n\n胎动：共 ${dayKicks.size} 次")
     if (dayKicks.isNotEmpty()) {
         sb.append("\n首次：").append(fmtFull(dayKicks.min()))
@@ -603,12 +595,12 @@ fun SummaryScreen() {
 @Composable
 fun SettingsScreen(onOpenSync: () -> Unit) {
     val ctx = LocalContext.current
-    var roundMin by remember { mutableStateOf(Store.roundMin(ctx)) }
+    var roundMin by remember(SyncManager.eddVersion) { mutableStateOf(Store.roundMin(ctx)) }
     var sound by remember { mutableStateOf(Store.soundOn(ctx)) }
     var vol by remember { mutableStateOf(Store.volume(ctx)) }
     var haptic by remember { mutableStateOf(Store.hapticOn(ctx)) }
-    // 预产期：同步落地后 eddVersion 自增，这里跟着刷新
-    var edd by remember(SyncManager.eddVersion) { mutableStateOf(Store.edd(ctx)) }
+    // 共享设置（预产期 / 每轮时长）：同步落地后 eddVersion 自增，这里跟着刷新
+    var edd by remember(SyncManager.eddVersion) { mutableStateOf(SyncManager.eddMs()) }
     // 清空记录的两道确认：1=第一次提醒，2=最后确认
     var confirmStep by remember { mutableStateOf(0) }
     var wipeKind by remember { mutableStateOf("kicks") }
@@ -659,7 +651,7 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
                     Modifier
                         .fillMaxWidth()
                         .clickable(enabled = SyncManager.canEdit) {
-                            pickEdd(ctx, edd) { v -> edd = v; Store.setEdd(ctx, v) }
+                            pickEdd(ctx, edd) { v -> edd = v; SyncManager.setEddShared(v) }
                         }
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -677,9 +669,9 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     if (SyncManager.canEdit)
-                        "预产期随配对同步：改完约 6 秒内同步到家人的手机，孕周与摘要按同一个预产期算。"
+                        "预产期、每轮时长等设置随配对同步：改完约 6 秒内同步到家人的手机，孕周与摘要按同一套设置算。"
                     else
-                        "查看模式下不能改预产期，需向配对设备申请编辑权限（设置 → 配对同步）。",
+                        "查看模式下不能改这些设置，会由配对设备同步过来；要修改请先申请编辑权限（设置 → 配对同步）。",
                     fontSize = 11.sp, color = Ink2, lineHeight = 15.sp
                 )
             }
@@ -711,10 +703,16 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
                         Box(
                             Modifier
                                 .background(if (roundMin == m) Brand else BrandSoft, RoundedCornerShape(50))
-                                .clickable { roundMin = m; Store.setRoundMin(ctx, m) }
+                                .clickable(enabled = SyncManager.canEdit) {
+                                    roundMin = m; SyncManager.setRoundMinShared(m)
+                                }
                                 .padding(horizontal = 12.dp, vertical = 8.dp)
                         ) { Text("${m}分", fontSize = 12.5.sp, color = if (roundMin == m) Color.White else Brand) }
                     }
+                }
+                if (!SyncManager.canEdit) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("查看模式下不能改，会由配对设备同步过来", fontSize = 11.sp, color = Ink2)
                 }
             }
         }
@@ -751,18 +749,28 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
                         onClick = { wipeKind = "kicks"; confirmStep = 1 },
+                        enabled = SyncManager.canEdit,
                         shape = RoundedCornerShape(50)
-                    ) { Text("清空胎动", color = Danger) }
+                    ) { Text("清空胎动", color = if (SyncManager.canEdit) Danger else Ink2) }
                     OutlinedButton(
                         onClick = { wipeKind = "ctns"; confirmStep = 1 },
+                        enabled = SyncManager.canEdit,
                         shape = RoundedCornerShape(50)
-                    ) { Text("清空宫缩", color = Danger) }
+                    ) { Text("清空宫缩", color = if (SyncManager.canEdit) Danger else Ink2) }
+                }
+                if (!SyncManager.canEdit) {
+                    Spacer(Modifier.height(6.dp))
+                    // 查看模式：记录是同步来的，清空入口锁死，防误触把别人的记录清了
+                    Text(
+                        "查看模式不能清空记录；请在可编辑的那台手机上清空（会同步删掉所有配对设备的记录）",
+                        fontSize = 11.sp, color = Ink2, lineHeight = 15.sp
+                    )
                 }
             }
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v5.1 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v5.2 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = if (wipeKind == "kicks") "胎动" else "宫缩"

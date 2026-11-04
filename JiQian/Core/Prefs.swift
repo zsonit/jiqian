@@ -5,7 +5,8 @@ enum PrefKey {
     static let windowMin = "kickWindowMinutes"
     static let holdMode = "contractionHoldMode"
     static let edd = "eddTimestamp"
-    /// 预产期的最后修改时间（毫秒）。预产期会随配对同步，靠它判断哪一端更新
+    /// 共享设置的最后修改时间（毫秒）。预产期、每轮时长、计数窗口、高风险因素、
+    /// 产科联系方式都会随配对同步，靠它判断哪一端最新
     static let eddT = "eddUpdatedAt"
     static let provider = "providerName"
     static let phone = "providerPhone"
@@ -86,4 +87,17 @@ enum Prefs {
         "胎动异常史",
         "曾有出血"
     ]
+}
+
+/// 随配对同步的共享设置（预产期、每轮时长、计数窗口、高风险因素、产科联系方式）。
+/// 界面改动统一走 touch()：记一次修改时刻并触发同步；查看模式下直接挡住。
+enum SharedSettings {
+    static func touch() {
+        guard SyncManager.shared.canEdit else { return }
+        let d = UserDefaults.standard
+        let prev = d.double(forKey: PrefKey.eddT)
+        // +1ms 兜底：同一毫秒连改两次也不会被判成「没变」
+        d.set(max(Date().timeIntervalSince1970 * 1000, prev + 1), forKey: PrefKey.eddT)
+        SyncManager.shared.onDataChanged()
+    }
 }

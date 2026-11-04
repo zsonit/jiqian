@@ -54,27 +54,51 @@ struct SyncSnapshot: Codable, Equatable {
         var t: Int64          // 删除发生时间（毫秒），用于过期修剪
     }
 
-    /// 共享设置（目前只有预产期）。预产期决定孕周与摘要里的提示，两台手机必须是同一个值，
-    /// 否则会各算各的孕周。
+    /// 共享设置。预产期决定孕周与摘要里的提示；每轮时长 / 计数窗口 / 高风险因素 /
+    /// 产科联系方式也是两台手机要一致的设置（圈出来的那几项）。
     /// edd = 预产期当天 0 点（本地时区）的 epoch 毫秒，0 = 未设置；
-    /// t = 最后修改时间（毫秒）。合并取 t 较大的一条（LWW），t 相同再比 edd，
-    /// 保证两端算出同一结果、不会互推。
+    /// rm = 每轮时长（分钟）；win = 计数窗口（分钟）；
+    /// risks = 高风险因素（逗号分隔原文）；prov/phone = 产科联系方式。
+    /// t = 最后修改时间（毫秒）。合并取 t 较大的一条（LWW），t 相同按字段字典序
+    /// 决出胜者，保证两端算出同一结果、不会互推。
     struct ST: Codable, Equatable {
         var edd: Int64 = 0
         var t: Int64 = 0
+        var rm: Int?        // 每轮时长（分钟）
+        var win: Int?       // 计数窗口（分钟）
+        var risks: String?  // 高风险因素，逗号分隔
+        var prov: String?   // 机构名称
+        var phone: String?  // 联系电话
 
-        init(edd: Int64 = 0, t: Int64 = 0) {
+        init(edd: Int64 = 0, t: Int64 = 0,
+             rm: Int? = nil, win: Int? = nil,
+             risks: String? = nil, prov: String? = nil, phone: String? = nil) {
             self.edd = edd
             self.t = t
+            self.rm = rm
+            self.win = win
+            self.risks = risks
+            self.prov = prov
+            self.phone = phone
         }
 
-        enum CodingKeys: String, CodingKey { case edd, t }
+        enum CodingKeys: String, CodingKey { case edd, t, rm, win, risks, prov, phone }
 
         /// 手写解码：字段缺失时用默认值，避免旧/半截数据把整份快照解崩
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             edd = try c.decodeIfPresent(Int64.self, forKey: .edd) ?? 0
             t = try c.decodeIfPresent(Int64.self, forKey: .t) ?? 0
+            rm = try c.decodeIfPresent(Int.self, forKey: .rm)
+            win = try c.decodeIfPresent(Int.self, forKey: .win)
+            risks = try c.decodeIfPresent(String.self, forKey: .risks)
+            prov = try c.decodeIfPresent(String.self, forKey: .prov)
+            phone = try c.decodeIfPresent(String.self, forKey: .phone)
+        }
+
+        /// 决胜键（与安卓 stKey 逐字一致）：t 相同时按它比大小，两端必收敛
+        var tieBreakKey: String {
+            "\(edd)|\(rm ?? 0)|\(win ?? 0)|\(risks ?? "")|\(prov ?? "")|\(phone ?? "")"
         }
     }
 
@@ -209,14 +233,25 @@ enum SnapshotIO {
 
     // MARK: 导出：SwiftData → 快照
 
-    /// 本机共享设置（预产期）→ 快照。没有设置过预产期就返回 nil，不带这段字段。
+    /// 本机共享设置 → 快照。什么都没设置过就返回 nil，不带这段字段。
     static func localSettings() -> SyncSnapshot.ST? {
         let d = UserDefaults.standard
         let sec = d.double(forKey: PrefKey.edd)
         let t = Int64(d.double(forKey: PrefKey.eddT).rounded())
         let edd = sec > 0 ? ms(Calendar.current.startOfDay(for: Date(timeIntervalSince1970: sec))) : 0
-        if edd == 0 && t == 0 { return nil }
-        return SyncSnapshot.ST(edd: edd, t: t)
+        let rm = Prefs.roundMin
+        let win = Prefs.windowMin
+        let risksRaw = d.string(forKey: PrefKey.risks) ?? ""
+        let prov = d.string(forKey: PrefKey.provider) ?? ""
+        let phone = d.string(forKey: PrefKey.phone) ?? ""
+        if edd == 0 && t == 0 && risksRaw.isEmpty && prov.isEmpty && phone.isEmpty {
+            return nil
+        }
+        return SyncSnapshot.ST(edd: edd, t: t,
+                               rm: rm, win: win,
+                               risks: risksRaw.isEmpty ? nil : risksRaw,
+                               prov: prov.isEmpty ? nil : prov,
+                               phone: phone.isEmpty ? nil : phone)
     }
 
     static func export(from ctx: ModelContext) throws -> SyncSnapshot {
@@ -301,13 +336,12 @@ enum SnapshotIO {
         return out
     }
 
-    /// 共享设置合并：t 大者胜；t 相同再比 edd（纯函数，两端规则一致）
+    /// 共享设置合并：t 大者胜；t 相同按决胜键比大小（纯函数，两端规则一致）
     static func mergeST(_ l: SyncSnapshot.ST?, _ r: SyncSnapshot.ST?) -> SyncSnapshot.ST? {
         guard let l else { return r }
         guard let r else { return l }
         if l.t != r.t { return l.t > r.t ? l : r }
-        if l.edd != r.edd { return l.edd > r.edd ? l : r }
-        return l
+        return l.tieBreakKey >= r.tieBreakKey ? l : r
     }
 
     private static func mergeKS(_ l: SyncSnapshot.KS, _ r: SyncSnapshot.KS) -> SyncSnapshot.KS {        var out = l
@@ -460,12 +494,14 @@ enum SnapshotIO {
             ctx.insert(e)
         }
 
-        // 共享设置（预产期）：落到 UserDefaults，界面上的 @AppStorage 会自动刷新。
+        // 共享设置（预产期 / 每轮时长 / 计数窗口 / 高风险因素 / 产科联系方式）：
+        // 落到 UserDefaults，界面上的 @AppStorage 会自动刷新。
         // 比本机记录更旧的不覆盖（防止刚设好就被对方旧值盖掉）
         if let st = snap.st {
             let d = UserDefaults.standard
             let localT = Int64(d.double(forKey: PrefKey.eddT).rounded())
             if st.t >= localT {
+                // 预产期
                 let sec = st.edd > 0
                     ? Calendar.current.startOfDay(for: date(st.edd)).timeIntervalSince1970
                     : 0
@@ -473,6 +509,27 @@ enum SnapshotIO {
                     d.set(sec, forKey: PrefKey.edd)
                     let text = st.edd > 0 ? dayText(st.edd) : "未设置"
                     AppLog.i("Sync", "预产期已按配对设备更新：\(text)")
+                }
+                // 每轮时长 / 计数窗口（只在合法值时落地）
+                if let rm = st.rm, [5, 10, 15, 30, 45, 60, 75].contains(rm),
+                   d.integer(forKey: PrefKey.roundMin) != rm {
+                    d.set(rm, forKey: PrefKey.roundMin)
+                    AppLog.i("Sync", "每轮时长已按配对设备更新：\(rm) 分钟")
+                }
+                if let win = st.win, [60, 120, 180].contains(win),
+                   d.integer(forKey: PrefKey.windowMin) != win {
+                    d.set(win, forKey: PrefKey.windowMin)
+                    AppLog.i("Sync", "计数窗口已按配对设备更新：\(win) 分钟")
+                }
+                // 高风险因素 / 产科联系方式
+                if let risks = st.risks, d.string(forKey: PrefKey.risks) != risks {
+                    d.set(risks, forKey: PrefKey.risks)
+                }
+                if let prov = st.prov, d.string(forKey: PrefKey.provider) != prov {
+                    d.set(prov, forKey: PrefKey.provider)
+                }
+                if let phone = st.phone, d.string(forKey: PrefKey.phone) != phone {
+                    d.set(phone, forKey: PrefKey.phone)
                 }
                 if localT != st.t { d.set(Double(st.t), forKey: PrefKey.eddT) }
             }

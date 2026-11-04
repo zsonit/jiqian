@@ -22,7 +22,8 @@ import java.util.UUID
  * 快照格式（与 iOS SyncSnapshot.swift 一致，时间一律 epoch 毫秒）：
  *  ks 胎动轮次 / ke 胎动事件 / cs 宫缩周期 / ce 宫缩事件
  *  cl 清空时间戳 / del 单条删除墓碑 [{"id":"ke@ms"|"ce@ms","t":删除时间}]
- *  st 共享设置（预产期）：{"edd":当天0点毫秒,"t":最后修改毫秒}
+ *  st 共享设置：{edd 预产期毫秒, rm 每轮时长, win 计数窗口, risks 高风险因素,
+ *     prov 机构名称, phone 联系电话, t 最后修改毫秒}；安卓不展示的也原样透传
  * 安卓没有会话概念：胎动以时间戳为锚点（id=k<ms>），宫缩以开始时间为锚点（id=c<s>）；
  * iOS 的轮次（ks/cs）原样透传保存，由 iOS 端负责字段级合并。
  */
@@ -44,6 +45,8 @@ object SyncManager {
     private const val KEY_ACL_NOTIFIED = "acl_notified"
     /** iOS 会话原始数组 {"ks":[...],"cs":[...]}：安卓不解析，透传保存让 iOS 端合并 */
     private const val KEY_EXTRA = "extra"
+    /** 共享设置（st）：预产期 / 每轮时长 / 计数窗口 / 高风险因素 / 产科联系方式，原样透传 */
+    private const val KEY_ST = "st"
     /// 前台自动检查间隔：对端改完后最多这么久就能看到
     private const val POLL_MS = 6_000L
     /// 本机改动后的防抖：够快、又能合并连续输入
@@ -101,6 +104,63 @@ object SyncManager {
 
     /** 「创建配对码」待登记：首次同步时把本机登记为 owner（可写） */
     @Volatile private var pendingOwnerAcl = false
+
+    // MARK: 共享设置（st）
+    //
+    // 快照里的 st 段：{edd 预产期毫秒, rm 每轮时长, win 计数窗口,
+    // risks 高风险因素(逗号分隔), prov 机构名称, phone 联系电话, t 最后修改毫秒}。
+    // win/risks/prov/phone 是 iOS 的设置，安卓不展示但必须原样透传——
+    // 少了这一步，安卓一推送就把这些设置抹掉了。
+    // 合并取 t 大的一条；t 相同按 stKey 字典序决胜（与 iOS tieBreakKey 逐字一致）。
+
+    /** 本机共享设置；v5.1 的旧数据存在 Store（edd/eddT），首次读取时迁移 */
+    private fun sharedSt(): JSONObject? {
+        prefs()?.getString(KEY_ST, null)?.let { raw ->
+            return runCatching { JSONObject(raw) }.getOrNull()
+        }
+        val ctx = appContext ?: return null
+        val edd = Store.edd(ctx)
+        val eddT = Store.eddT(ctx)
+        if (edd <= 0L && eddT <= 0L) return null
+        return JSONObject().put("edd", edd).put("t", eddT).put("rm", Store.roundMin(ctx))
+    }
+
+    private fun saveSt(st: JSONObject?) {
+        if (st == null) prefs()?.edit()?.remove(KEY_ST)?.apply()
+        else prefs()?.edit()?.putString(KEY_ST, st.toString())?.apply()
+    }
+
+    /** t 相同时的决胜键（与 iOS ST.tieBreakKey 逐字一致），保证两端收敛 */
+    private fun stKey(o: JSONObject): String =
+        "${o.optLong("edd", 0L)}|${o.optLong("rm", 0L)}|${o.optLong("win", 0L)}|" +
+            "${o.optString("risks")}|${o.optString("prov")}|${o.optString("phone")}"
+
+    /** 预产期（当天 0 点毫秒，0 = 未设置）：设置页与摘要显示用 */
+    fun eddMs(): Long = sharedSt()?.optLong("edd", 0L) ?: 0L
+
+    /** 修改共享设置：更新 st、记修改时刻、触发同步；false = 查看模式不能改 */
+    fun updateSharedSettings(edit: (JSONObject) -> Unit): Boolean {
+        if (!computeCanEdit()) return false
+        val st = sharedSt() ?: JSONObject()
+        val prevT = st.optLong("t", 0L)
+        edit(st)
+        st.put("t", maxOf(System.currentTimeMillis(), prevT + 1))
+        saveSt(st)
+        onDataChanged()
+        return true
+    }
+
+    /** 改预产期：写 st 并同步；Store 里留一份镜像给旧代码路径 */
+    fun setEddShared(ms: Long) {
+        if (!updateSharedSettings { it.put("edd", ms) }) return
+        appContext?.let { ctx -> Store.applyEdd(ctx, ms, sharedSt()?.optLong("t", 0L) ?: 0L) }
+    }
+
+    /** 改每轮时长：写 st 并同步；Store 里留一份镜像（界面与组件读 Store） */
+    fun setRoundMinShared(v: Int) {
+        if (!updateSharedSettings { it.put("rm", v) }) return
+        appContext?.let { Store.setRoundMin(it, v) }
+    }
 
     val pairedCode: String?
         get() = prefs()?.getString(KEY_CODE, null)
@@ -586,14 +646,8 @@ object SyncManager {
                 .put("writers", JSONArray().put(deviceId()))
                 .put("req", JSONArray()))
         }
-        // 共享设置（预产期）：两台手机必须用同一个预产期，否则各算各的孕周
-        if (ctx != null) {
-            val edd = Store.edd(ctx)
-            val eddT = Store.eddT(ctx)
-            if (edd > 0L || eddT > 0L) {
-                snap.put("st", JSONObject().put("edd", edd).put("t", eddT))
-            }
-        }
+        // 共享设置（预产期 / 每轮时长 / 计数窗口 / 高风险因素 / 产科联系方式）
+        sharedSt()?.let { snap.put("st", it) }
         return snap
     }
 
@@ -704,7 +758,7 @@ object SyncManager {
             val rt = rs.optLong("t", 0L)
             st = when {
                 lt != rt -> if (lt > rt) ls else rs
-                else -> if (ls.optLong("edd", 0L) >= rs.optLong("edd", 0L)) ls else rs
+                else -> if (stKey(ls) >= stKey(rs)) ls else rs
             }
         }
         st?.let { out.put("st", it) }
@@ -800,15 +854,30 @@ object SyncManager {
             ?.apply()
         // 权限表随快照落地，并刷新可写状态（被授权/被批准时立即生效）
         snap.optJSONObject("acl")?.let { refreshAccess(it) }
-        // 共享设置（预产期）：比本机记录旧的不覆盖，避免刚改好又被对方旧值盖回去
+        // 共享设置：整段原样保存（win/risks/prov/phone 安卓不展示也要透传），
+        // 已知字段（预产期、每轮时长）落到各自偏好；比本机旧的不覆盖，
+        // 避免刚改好又被对方旧值弹回去
         snap.optJSONObject("st")?.let { st ->
             val t = st.optLong("t", 0L)
-            if (t >= Store.eddT(ctx)) {
+            val curT = sharedSt()?.optLong("t", 0L) ?: 0L
+            if (t >= curT) {
+                var changed = false
+                if (st.toString() != sharedSt()?.toString()) {
+                    saveSt(st)
+                    changed = true
+                }
                 val edd = st.optLong("edd", 0L)
                 if (edd != Store.edd(ctx) || t != Store.eddT(ctx)) {
                     Store.applyEdd(ctx, edd, t)
-                    eddVersion++
+                    changed = true
                 }
+                st.optLong("rm", 0L).takeIf { it > 0L }?.let { rm ->
+                    if (Store.roundMin(ctx) != rm.toInt()) {
+                        Store.setRoundMin(ctx, rm.toInt())
+                        changed = true
+                    }
+                }
+                if (changed) eddVersion++
             }
         }
     }

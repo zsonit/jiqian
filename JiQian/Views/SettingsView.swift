@@ -33,14 +33,36 @@ struct SettingsView: View {
                 guard sync.canEdit else { return }
                 let day = Calendar.current.startOfDay(for: newValue)
                 eddTimestamp = day.timeIntervalSince1970
-                // 记下修改时刻：预产期随配对同步，靠它判断哪一端是最新的
-                // （+1ms 兜底，同一毫秒连改两次也不会被判成「没变」）
-                let prev = UserDefaults.standard.double(forKey: PrefKey.eddT)
-                let t = max(Date().timeIntervalSince1970 * 1000, prev + 1)
-                UserDefaults.standard.set(t, forKey: PrefKey.eddT)
-                SyncManager.shared.onDataChanged()
+                SharedSettings.touch()
             }
         )
+    }
+
+    /// 共享设置的通用绑定：写入后记一次修改时刻并触发同步
+    private func sharedBinding<T>(for key: String, _ get: @escaping () -> T) -> Binding<T> {
+        Binding(
+            get: get,
+            set: { newValue in
+                UserDefaults.standard.set(newValue, forKey: key)
+                SharedSettings.touch()
+            }
+        )
+    }
+
+    private var roundMinBinding: Binding<Int> {
+        sharedBinding(for: PrefKey.roundMin) { roundMin }
+    }
+
+    private var windowMinBinding: Binding<Int> {
+        sharedBinding(for: PrefKey.windowMin) { windowMin }
+    }
+
+    private var providerBinding: Binding<String> {
+        sharedBinding(for: PrefKey.provider) { provider }
+    }
+
+    private var phoneBinding: Binding<String> {
+        sharedBinding(for: PrefKey.phone) { phone }
     }
 
     private var riskSet: Set<String> {
@@ -65,16 +87,18 @@ struct SettingsView: View {
                         Spacer()
                         Text(gestationLabel).foregroundStyle(Pal.ink2)
                     }
-                    Picker("每轮时长", selection: $roundMin) {
+                    Picker("每轮时长", selection: roundMinBinding) {
                         ForEach([5, 10, 15, 30, 45, 60, 75], id: \.self) { value in
                             Text("\(value) 分钟").tag(value)
                         }
                     }
-                    Picker("计数窗口", selection: $windowMin) {
+                    .disabled(!sync.canEdit)
+                    Picker("计数窗口", selection: windowMinBinding) {
                         ForEach([60, 120, 180], id: \.self) { value in
                             Text("\(value) 分钟").tag(value)
                         }
                     }
+                    .disabled(!sync.canEdit)
                     Toggle("宫缩用按住方式", isOn: $holdMode)
                     Toggle("点击提示音", isOn: $soundOn)
                     Toggle("点击震动", isOn: $hapticOn)
@@ -96,8 +120,8 @@ struct SettingsView: View {
                     Text("孕周与目标")
                 } footer: {
                     Text(sync.canEdit
-                         ? "预产期随配对同步：改动后约 6 秒内同步到家人的手机，孕周与摘要按同一个预产期计算。"
-                         : "查看模式下不能改预产期。要修改请向配对设备申请编辑权限（设置 → 配对同步）。")
+                         ? "预产期、每轮时长、计数窗口都随配对同步：改动后约 6 秒内同步到家人的手机，孕周与摘要按同一套设置算。"
+                         : "查看模式下不能改这些设置。要修改请向配对设备申请编辑权限（设置 → 配对同步）。")
                 }
 
                 Section("快捷指令") {
@@ -160,20 +184,25 @@ struct SettingsView: View {
                 }
 
                 Section("产科联系方式") {
-                    TextField("机构名称", text: $provider)
+                    TextField("机构名称", text: providerBinding)
                         .textInputAutocapitalization(.never)
-                    TextField("联系电话", text: $phone)
+                        .disabled(!sync.canEdit)
+                    TextField("联系电话", text: phoneBinding)
                         .keyboardType(.phonePad)
+                        .disabled(!sync.canEdit)
                 }
 
                 Section {
                     ForEach(Prefs.allRisks, id: \.self) { tag in
                         Toggle(tag, isOn: binding(for: tag))
+                            .disabled(!sync.canEdit)
                     }
                 } header: {
                     Text("高风险因素")
                 } footer: {
-                    Text("勾选不代表有问题，只是让提示更早出现。是否属于高危，以你的产科医生判断为准。")
+                    Text(sync.canEdit
+                         ? "勾选不代表有问题，只是让提示更早出现。是否属于高危，以你的产科医生判断为准。勾选状态随配对同步。"
+                         : "查看模式下不能改，勾选状态由可编辑端同步过来。")
                 }
 
                 Section {
@@ -187,15 +216,24 @@ struct SettingsView: View {
                         Spacer()
                         Text("\(contractions.filter { $0.endedAt != nil }.count) 次").foregroundStyle(Pal.ink2)
                     }
-                    Button(role: .destructive) {
-                        showWipeConfirm = true
-                    } label: {
-                        Text("清空全部记录")
+                    if sync.canEdit {
+                        Button(role: .destructive) {
+                            showWipeConfirm = true
+                        } label: {
+                            Text("清空全部记录")
+                        }
+                    } else {
+                        // 查看模式：数据是同步来的，清空入口整个不出现，防误触
+                        Text("查看模式：记录由配对设备同步而来，不能在这里清空")
+                            .font(.footnote)
+                            .foregroundStyle(Pal.ink2)
                     }
                 } header: {
                     Text("数据")
                 } footer: {
-                    Text("不配对时全部数据只存在这台设备上，没有账号，也不会上传。卸载应用即删除。开启配对同步后，记录会在你的配对设备间加密同步。")
+                    Text(sync.canEdit
+                         ? "不配对时全部数据只存在这台设备上，没有账号，也不会上传。卸载应用即删除。开启配对同步后，记录会在你的配对设备间加密同步。"
+                         : "查看模式下没有清空入口；需要清空请在可编辑的那台手机上操作（会同步删除所有配对设备的记录）。")
                 }
 
                 Section {
@@ -262,9 +300,11 @@ struct SettingsView: View {
         Binding(
             get: { riskSet.contains(tag) },
             set: { isOn in
+                guard sync.canEdit else { return }
                 var set = riskSet
                 if isOn { set.insert(tag) } else { set.remove(tag) }
                 risksRaw = Prefs.allRisks.filter { set.contains($0) }.joined(separator: ",")
+                SharedSettings.touch()
             }
         )
     }
