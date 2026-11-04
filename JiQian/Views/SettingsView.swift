@@ -28,7 +28,18 @@ struct SettingsView: View {
                     ? Date(timeIntervalSince1970: eddTimestamp)
                     : Calendar.current.date(byAdding: .day, value: 90, to: Date()) ?? Date()
             },
-            set: { eddTimestamp = $0.timeIntervalSince1970 }
+            set: { newValue in
+                // 查看模式：预产期是两端共享的设置，改不了（要改先申请编辑权限）
+                guard sync.canEdit else { return }
+                let day = Calendar.current.startOfDay(for: newValue)
+                eddTimestamp = day.timeIntervalSince1970
+                // 记下修改时刻：预产期随配对同步，靠它判断哪一端是最新的
+                // （+1ms 兜底，同一毫秒连改两次也不会被判成「没变」）
+                let prev = UserDefaults.standard.double(forKey: PrefKey.eddT)
+                let t = max(Date().timeIntervalSince1970 * 1000, prev + 1)
+                UserDefaults.standard.set(t, forKey: PrefKey.eddT)
+                SyncManager.shared.onDataChanged()
+            }
         )
     }
 
@@ -46,8 +57,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("孕周与目标") {
+                Section {
                     DatePicker("预产期", selection: eddBinding, displayedComponents: .date)
+                        .disabled(!sync.canEdit)
                     HStack {
                         Text("当前孕周")
                         Spacer()
@@ -80,6 +92,12 @@ struct SettingsView: View {
                             }
                         }
                     }
+                } header: {
+                    Text("孕周与目标")
+                } footer: {
+                    Text(sync.canEdit
+                         ? "预产期随配对同步：改动后约 6 秒内同步到家人的手机，孕周与摘要按同一个预产期计算。"
+                         : "查看模式下不能改预产期。要修改请向配对设备申请编辑权限（设置 → 配对同步）。")
                 }
 
                 Section("快捷指令") {

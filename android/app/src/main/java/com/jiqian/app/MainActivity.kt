@@ -1,5 +1,6 @@
 package com.jiqian.app
 
+import android.app.DatePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
@@ -33,6 +34,7 @@ import com.jiqian.app.widget.Widgets
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -133,6 +135,24 @@ object Store {
 
     fun roundMin(ctx: Context) = sp(ctx).getInt(KEY_PREFS + "roundMin", 60)
     fun setRoundMin(ctx: Context, v: Int) = sp(ctx).edit().putInt(KEY_PREFS + "roundMin", v).apply()
+
+    /** 预产期（当天 0 点毫秒，0 = 未设置）与最后修改时间，随配对同步 */
+    fun edd(ctx: Context) = sp(ctx).getLong(KEY_PREFS + "edd", 0L)
+    fun eddT(ctx: Context) = sp(ctx).getLong(KEY_PREFS + "eddT", 0L)
+
+    /** 用户手动改预产期：记修改时刻 + 触发同步（查看模式下挡住） */
+    fun setEdd(ctx: Context, ms: Long) {
+        if (!SyncManager.canEdit) return
+        val t = maxOf(System.currentTimeMillis(), sp(ctx).getLong(KEY_PREFS + "eddT", 0L) + 1)
+        sp(ctx).edit().putLong(KEY_PREFS + "edd", ms).putLong(KEY_PREFS + "eddT", t).apply()
+        SyncManager.onDataChanged()
+    }
+
+    /** 同步落地：只写不改标记，避免两端互推 */
+    fun applyEdd(ctx: Context, ms: Long, t: Long) {
+        sp(ctx).edit().putLong(KEY_PREFS + "edd", ms).putLong(KEY_PREFS + "eddT", t).apply()
+    }
+
     fun soundOn(ctx: Context) = sp(ctx).getBoolean(KEY_PREFS + "sound", true)
     fun setSoundOn(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean(KEY_PREFS + "sound", v).apply()
     fun volume(ctx: Context) = sp(ctx).getInt(KEY_PREFS + "vol", 80)
@@ -179,6 +199,33 @@ fun dayStart(t: Long): Long {
     c.set(java.util.Calendar.HOUR_OF_DAY, 0); c.set(java.util.Calendar.MINUTE, 0)
     c.set(java.util.Calendar.SECOND, 0); c.set(java.util.Calendar.MILLISECOND, 0)
     return c.timeInMillis
+}
+
+/** 预产期日期选择：没设置过就从今天往后 90 天（与 iOS 一致） */
+fun pickEdd(ctx: Context, cur: Long, onPicked: (Long) -> Unit) {
+    val cal = Calendar.getInstance()
+    if (cur > 0L) cal.timeInMillis = cur else cal.add(Calendar.DAY_OF_YEAR, 90)
+    DatePickerDialog(
+        ctx,
+        { _, y, m, d ->
+            val c = Calendar.getInstance()
+            c.set(y, m, d, 0, 0, 0)
+            c.set(Calendar.MILLISECOND, 0)
+            onPicked(c.timeInMillis)
+        },
+        cal.get(Calendar.YEAR),
+        cal.get(Calendar.MONTH),
+        cal.get(Calendar.DAY_OF_MONTH)
+    ).show()
+}
+
+/** 孕周文案：按预产期倒推 40 周（280 天），与 iOS PregnancyClock 同一套算法 */
+fun gestationText(eddMs: Long, now: Long = System.currentTimeMillis()): String {
+    if (eddMs <= 0L) return "未设定"
+    val daysLeft = ((dayStart(eddMs) - dayStart(now)) / 86_400_000L).toInt()
+    val passed = 280 - daysLeft
+    if (passed < 0 || passed > 320) return "未设定"
+    return "${passed / 7} 周 ${passed % 7} 天"
 }
 
 class MainActivity : ComponentActivity() {
@@ -484,6 +531,8 @@ fun SummaryScreen() {
     val sb = StringBuilder()
     sb.append("胎动记录 · ")
     sb.append(if (showAll) "全部" else fmtDay(targetDay))
+    // 预产期来自同步设置，孕周按所看那一天算（与 iOS 摘要一致）
+    Store.edd(ctx).takeIf { it > 0L }?.let { sb.append("\n孕周：").append(gestationText(it, targetDay)) }
     sb.append("\n\n胎动：共 ${dayKicks.size} 次")
     if (dayKicks.isNotEmpty()) {
         sb.append("\n首次：").append(fmtFull(dayKicks.min()))
@@ -558,6 +607,8 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
     var sound by remember { mutableStateOf(Store.soundOn(ctx)) }
     var vol by remember { mutableStateOf(Store.volume(ctx)) }
     var haptic by remember { mutableStateOf(Store.hapticOn(ctx)) }
+    // 预产期：同步落地后 eddVersion 自增，这里跟着刷新
+    var edd by remember(SyncManager.eddVersion) { mutableStateOf(Store.edd(ctx)) }
     // 清空记录的两道确认：1=第一次提醒，2=最后确认
     var confirmStep by remember { mutableStateOf(0) }
     var wipeKind by remember { mutableStateOf("kicks") }
@@ -598,6 +649,41 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
             "用 6 位配对码把这台手机和家人的手机连起来，记录端到端加密后自动双向同步",
             fontSize = 11.sp, color = Ink2, lineHeight = 15.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
         )
+
+        Spacer(Modifier.height(12.dp))
+        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+            Column(Modifier.padding(16.dp)) {
+                Text("孕周与目标", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = SyncManager.canEdit) {
+                            pickEdd(ctx, edd) { v -> edd = v; Store.setEdd(ctx, v) }
+                        }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("预产期", fontSize = 14.sp, color = Ink)
+                    Spacer(Modifier.weight(1f))
+                    Text(if (edd > 0L) fmtDay(edd) else "未设置", fontSize = 14.sp, color = Brand)
+                    Text(" ›", fontSize = 14.sp, color = Ink2)
+                }
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("当前孕周", fontSize = 14.sp, color = Ink)
+                    Spacer(Modifier.weight(1f))
+                    Text(gestationText(edd), fontSize = 14.sp, color = Ink2)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (SyncManager.canEdit)
+                        "预产期随配对同步：改完约 6 秒内同步到家人的手机，孕周与摘要按同一个预产期算。"
+                    else
+                        "查看模式下不能改预产期，需向配对设备申请编辑权限（设置 → 配对同步）。",
+                    fontSize = 11.sp, color = Ink2, lineHeight = 15.sp
+                )
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
         Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
@@ -676,7 +762,7 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v4.9 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v5.1 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = if (wipeKind == "kicks") "胎动" else "宫缩"

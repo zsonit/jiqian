@@ -5,6 +5,8 @@ enum PrefKey {
     static let windowMin = "kickWindowMinutes"
     static let holdMode = "contractionHoldMode"
     static let edd = "eddTimestamp"
+    /// 预产期的最后修改时间（毫秒）。预产期会随配对同步，靠它判断哪一端更新
+    static let eddT = "eddUpdatedAt"
     static let provider = "providerName"
     static let phone = "providerPhone"
     static let risks = "highRiskTags"

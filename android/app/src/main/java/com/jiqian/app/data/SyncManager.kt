@@ -22,6 +22,7 @@ import java.util.UUID
  * 快照格式（与 iOS SyncSnapshot.swift 一致，时间一律 epoch 毫秒）：
  *  ks 胎动轮次 / ke 胎动事件 / cs 宫缩周期 / ce 宫缩事件
  *  cl 清空时间戳 / del 单条删除墓碑 [{"id":"ke@ms"|"ce@ms","t":删除时间}]
+ *  st 共享设置（预产期）：{"edd":当天0点毫秒,"t":最后修改毫秒}
  * 安卓没有会话概念：胎动以时间戳为锚点（id=k<ms>），宫缩以开始时间为锚点（id=c<s>）；
  * iOS 的轮次（ks/cs）原样透传保存，由 iOS 端负责字段级合并。
  */
@@ -93,6 +94,9 @@ object SyncManager {
         private set
     /** 权限表版本号：每次落盘自增，界面据此刷新申请列表 */
     var aclVersion by mutableStateOf(0)
+        private set
+    /** 共享设置（预产期）版本号：同步落地后自增，设置页据此刷新 */
+    var eddVersion by mutableStateOf(0)
         private set
 
     /** 「创建配对码」待登记：首次同步时把本机登记为 owner（可写） */
@@ -582,6 +586,14 @@ object SyncManager {
                 .put("writers", JSONArray().put(deviceId()))
                 .put("req", JSONArray()))
         }
+        // 共享设置（预产期）：两台手机必须用同一个预产期，否则各算各的孕周
+        if (ctx != null) {
+            val edd = Store.edd(ctx)
+            val eddT = Store.eddT(ctx)
+            if (edd > 0L || eddT > 0L) {
+                snap.put("st", JSONObject().put("edd", edd).put("t", eddT))
+            }
+        }
         return snap
     }
 
@@ -682,6 +694,21 @@ object SyncManager {
         val rcs = remote.optJSONArray("cs")
         out.put("cs", if (rcs != null && rcs.length() > 0) rcs else (local.optJSONArray("cs") ?: JSONArray()))
 
+        // 共享设置（预产期）：取最后一次修改（t 大者胜，t 相同比 edd），
+        // 规则与 iOS SnapshotIO.mergeST 一致
+        val ls = local.optJSONObject("st")
+        val rs = remote.optJSONObject("st")
+        var st: JSONObject? = ls ?: rs
+        if (ls != null && rs != null) {
+            val lt = ls.optLong("t", 0L)
+            val rt = rs.optLong("t", 0L)
+            st = when {
+                lt != rt -> if (lt > rt) ls else rs
+                else -> if (ls.optLong("edd", 0L) >= rs.optLong("edd", 0L)) ls else rs
+            }
+        }
+        st?.let { out.put("st", it) }
+
         // 权限表合并（与 iOS SyncACLResolver 一致）：owner 以云端为准、writers 并集、申请并集减去已授权
         val la = local.optJSONObject("acl")
         val ra = remote.optJSONObject("acl")
@@ -773,6 +800,17 @@ object SyncManager {
             ?.apply()
         // 权限表随快照落地，并刷新可写状态（被授权/被批准时立即生效）
         snap.optJSONObject("acl")?.let { refreshAccess(it) }
+        // 共享设置（预产期）：比本机记录旧的不覆盖，避免刚改好又被对方旧值盖回去
+        snap.optJSONObject("st")?.let { st ->
+            val t = st.optLong("t", 0L)
+            if (t >= Store.eddT(ctx)) {
+                val edd = st.optLong("edd", 0L)
+                if (edd != Store.edd(ctx) || t != Store.eddT(ctx)) {
+                    Store.applyEdd(ctx, edd, t)
+                    eddVersion++
+                }
+            }
+        }
     }
 
     // MARK: 同步主链路

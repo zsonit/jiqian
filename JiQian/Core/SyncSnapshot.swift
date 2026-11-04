@@ -54,6 +54,30 @@ struct SyncSnapshot: Codable, Equatable {
         var t: Int64          // 删除发生时间（毫秒），用于过期修剪
     }
 
+    /// 共享设置（目前只有预产期）。预产期决定孕周与摘要里的提示，两台手机必须是同一个值，
+    /// 否则会各算各的孕周。
+    /// edd = 预产期当天 0 点（本地时区）的 epoch 毫秒，0 = 未设置；
+    /// t = 最后修改时间（毫秒）。合并取 t 较大的一条（LWW），t 相同再比 edd，
+    /// 保证两端算出同一结果、不会互推。
+    struct ST: Codable, Equatable {
+        var edd: Int64 = 0
+        var t: Int64 = 0
+
+        init(edd: Int64 = 0, t: Int64 = 0) {
+            self.edd = edd
+            self.t = t
+        }
+
+        enum CodingKeys: String, CodingKey { case edd, t }
+
+        /// 手写解码：字段缺失时用默认值，避免旧/半截数据把整份快照解崩
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            edd = try c.decodeIfPresent(Int64.self, forKey: .edd) ?? 0
+            t = try c.decodeIfPresent(Int64.self, forKey: .t) ?? 0
+        }
+    }
+
     /// 配对权限（端到端加密，随快照同步）：
     /// owner = 创建配对码的设备；writers = 允许修改数据的设备；
     /// req = 「申请编辑权限」的待审批列表。不在 writers 里 = 只读（查看模式）。
@@ -98,6 +122,7 @@ struct SyncSnapshot: Codable, Equatable {
     var cl: Int64 = 0
     var del: [Del] = []
     var acl: ACL?         // nil = 旧版本配对（全员可写，向后兼容）
+    var st: ST?           // nil = 旧版本快照，没有共享设置（预产期）
 
     /// 本机从头到尾没有任何数据（全新安装）。此时只拉不推，避免空快照盖掉对方。
     var isEmpty: Bool {
@@ -174,10 +199,29 @@ enum SnapshotIO {
         Date(timeIntervalSince1970: Double(ms) / 1000.0)
     }
 
+    /// 日期文案（日志用）
+    static func dayText(_ ms: Int64) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date(ms))
+    }
+
     // MARK: 导出：SwiftData → 快照
+
+    /// 本机共享设置（预产期）→ 快照。没有设置过预产期就返回 nil，不带这段字段。
+    static func localSettings() -> SyncSnapshot.ST? {
+        let d = UserDefaults.standard
+        let sec = d.double(forKey: PrefKey.edd)
+        let t = Int64(d.double(forKey: PrefKey.eddT).rounded())
+        let edd = sec > 0 ? ms(Calendar.current.startOfDay(for: Date(timeIntervalSince1970: sec))) : 0
+        if edd == 0 && t == 0 { return nil }
+        return SyncSnapshot.ST(edd: edd, t: t)
+    }
 
     static func export(from ctx: ModelContext) throws -> SyncSnapshot {
         var snap = SyncSnapshot()
+        snap.st = localSettings()
         for s in try ctx.fetch(FetchDescriptor<KickSession>()) {
             snap.ks.append(SyncSnapshot.KS(id: s.id.uuidString,
                                            s: ms(s.startedAt),
@@ -220,6 +264,8 @@ enum SnapshotIO {
         var out = local
         out.v = 1
         out.cl = max(local.cl, remote.cl)
+        // 共享设置：取最后一次修改（LWW），t 相同再比 edd
+        out.st = mergeST(local.st, remote.st)
 
         // 墓碑并集 + 过期修剪
         var del = Dictionary(uniqueKeysWithValues: local.del.map { ($0.id, $0) })
@@ -255,8 +301,16 @@ enum SnapshotIO {
         return out
     }
 
-    private static func mergeKS(_ l: SyncSnapshot.KS, _ r: SyncSnapshot.KS) -> SyncSnapshot.KS {
-        var out = l
+    /// 共享设置合并：t 大者胜；t 相同再比 edd（纯函数，两端规则一致）
+    static func mergeST(_ l: SyncSnapshot.ST?, _ r: SyncSnapshot.ST?) -> SyncSnapshot.ST? {
+        guard let l else { return r }
+        guard let r else { return l }
+        if l.t != r.t { return l.t > r.t ? l : r }
+        if l.edd != r.edd { return l.edd > r.edd ? l : r }
+        return l
+    }
+
+    private static func mergeKS(_ l: SyncSnapshot.KS, _ r: SyncSnapshot.KS) -> SyncSnapshot.KS {        var out = l
         out.s = min(l.s, r.s)
         switch (l.e, r.e) {
         case (nil, let e?): out.e = e
@@ -404,6 +458,24 @@ enum SnapshotIO {
             e.gap = r.gap
             e.isSuspect = r.sus
             ctx.insert(e)
+        }
+
+        // 共享设置（预产期）：落到 UserDefaults，界面上的 @AppStorage 会自动刷新。
+        // 比本机记录更旧的不覆盖（防止刚设好就被对方旧值盖掉）
+        if let st = snap.st {
+            let d = UserDefaults.standard
+            let localT = Int64(d.double(forKey: PrefKey.eddT).rounded())
+            if st.t >= localT {
+                let sec = st.edd > 0
+                    ? Calendar.current.startOfDay(for: date(st.edd)).timeIntervalSince1970
+                    : 0
+                if abs(d.double(forKey: PrefKey.edd) - sec) > 0.5 {
+                    d.set(sec, forKey: PrefKey.edd)
+                    let text = st.edd > 0 ? dayText(st.edd) : "未设置"
+                    AppLog.i("Sync", "预产期已按配对设备更新：\(text)")
+                }
+                if localT != st.t { d.set(Double(st.t), forKey: PrefKey.eddT) }
+            }
         }
 
         try ctx.save()

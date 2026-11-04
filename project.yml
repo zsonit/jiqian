@@ -26,8 +26,8 @@ targets:
       properties:
         CFBundleDisplayName: 胎动记录
         CFBundleName: JiQian
-        CFBundleShortVersionString: "5.0"
-        CFBundleVersion: "50"
+        CFBundleShortVersionString: "5.1"
+        CFBundleVersion: "51"
         CFBundleURLTypes:
           - CFBundleURLName: com.jiqian.app
             CFBundleURLSchemes:
@@ -78,8 +78,8 @@ targets:
       path: Widget/Info.plist
       properties:
         CFBundleDisplayName: 胎动组件
-        CFBundleShortVersionString: "5.0"
-        CFBundleVersion: "50"
+        CFBundleShortVersionString: "5.1"
+        CFBundleVersion: "51"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
