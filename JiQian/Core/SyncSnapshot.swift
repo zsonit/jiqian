@@ -107,10 +107,28 @@ struct SyncSnapshot: Codable, Equatable {
     /// req = 「申请编辑权限」的待审批列表。不在 writers 里 = 只读（查看模式）。
     /// 两端对 acl 的合并规则一致（owner 以云端为准、writers 并集、req 并集减去已授权），
     /// 保证各端算出同一结果，不会互推死循环。
+    ///
+    /// v5.3 设备管理（只有 owner 能写这三个字段，其他端只读应用）：
+    /// ub = 强制解绑记录 [设备id + 时刻]。被解绑的设备同步时发现自己在这里，
+    ///      就自动解除配对（保留本机数据），且无法再用同一个配对码加入。
+    /// wp = 清除数据命令 [设备id + 时刻]。目标设备发现自己在这里，就清空本机
+    ///      全部记录并解除配对。清除同时也会写 ub（清完就走，不再同步）。
+    /// sm = 每台设备的共享掩码 [设备id + k胎动 + c宫缩 + s设置 + 修改时刻t]。
+    ///      owner 在管理界面单独控制「同步哪类数据给这台设备」；关闭的类别
+    ///      在对方设备上不再落地、已有的也会被移除。合并按设备 LWW（t 大者胜）。
     struct ACL: Codable, Equatable {
         struct Req: Codable, Equatable {
             var id: String    // 申请设备的 deviceId
             var t: Int64      // 申请时间（毫秒），用于排序展示 / 撤销比较
+        }
+        /// 设备的数据同步掩码：k = 胎动，c = 宫缩，s = 共享设置（预产期等）。
+        /// 1 = 同步，0 = 不同步。t = owner 最后修改时刻（毫秒），合并 LWW 用。
+        struct Mask: Codable, Equatable {
+            var id: String
+            var k: Int
+            var c: Int
+            var s: Int
+            var t: Int64
         }
         var owner: String
         var writers: [String] = []
@@ -118,23 +136,49 @@ struct SyncSnapshot: Codable, Equatable {
         /// 已撤销（本机放弃）或被忽略的申请：id + 撤销时刻。
         /// 没有它，「撤销申请」会被两端并集合并规则原样并回来，表现就是点了没反应。
         var rv: [Req] = []
+        /// owner 强制解绑的设备（v5.3）
+        var ub: [Req] = []
+        /// owner 下发的「清除数据」命令（v5.3），清除时会一并写 ub
+        var wp: [Req] = []
+        /// 每台设备的数据同步掩码（v5.3）
+        var sm: [Mask] = []
 
-        enum CodingKeys: String, CodingKey { case owner, writers, req, rv }
+        enum CodingKeys: String, CodingKey { case owner, writers, req, rv, ub, wp, sm }
 
-        init(owner: String, writers: [String] = [], req: [Req] = [], rv: [Req] = []) {
+        init(owner: String, writers: [String] = [], req: [Req] = [], rv: [Req] = [],
+             ub: [Req] = [], wp: [Req] = [], sm: [Mask] = []) {
             self.owner = owner
             self.writers = writers
             self.req = req
             self.rv = rv
+            self.ub = ub
+            self.wp = wp
+            self.sm = sm
         }
 
-        /// 手写解码：rv 是后加的字段，旧快照里没有，必须能缺省
+        /// 手写解码：rv/ub/wp/sm 都是后加的字段，旧快照里没有，必须能缺省
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             owner = try c.decodeIfPresent(String.self, forKey: .owner) ?? ""
             writers = try c.decodeIfPresent([String].self, forKey: .writers) ?? []
             req = try c.decodeIfPresent([Req].self, forKey: .req) ?? []
             rv = try c.decodeIfPresent([Req].self, forKey: .rv) ?? []
+            ub = try c.decodeIfPresent([Req].self, forKey: .ub) ?? []
+            wp = try c.decodeIfPresent([Req].self, forKey: .wp) ?? []
+            sm = try c.decodeIfPresent([Mask].self, forKey: .sm) ?? []
+        }
+
+        /// 本机设备是否已被 owner 强制解绑
+        func unbound(deviceID: String) -> Bool {
+            ub.contains { $0.id == deviceID }
+        }
+        /// 指向本机的「清除数据」命令（有的话返回最新那条）
+        func wipeCommand(deviceID: String) -> Req? {
+            wp.filter { $0.id == deviceID }.max { $0.t < $1.t }
+        }
+        /// 本机设备的共享掩码（没有条目 = 全部同步）
+        func mask(deviceID: String) -> Mask? {
+            sm.filter { $0.id == deviceID }.max { $0.t < $1.t }
         }
     }
 
@@ -169,12 +213,47 @@ enum SyncACLResolver {
     /// 撤销记录保留 180 天（与墓碑一致），之后自动修剪
     static let revokeTTLms: Int64 = 180 * 86400 * 1000
     private static let revokeCap = 200
+    /// 强制解绑 / 清除数据记录的保留期与上限（同撤销记录）
+    private static let adminCap = 200
 
     /// 撤销时刻用「对应申请时间 + 1ms」：两端时钟有偏差也不会让撤销失效
     static func revokeTime(requester: String, in acl: SyncSnapshot.ACL?) -> Int64 {
         let reqT = acl?.req.first { $0.id == requester }?.t ?? 0
         let rvT = acl?.rv.first { $0.id == requester }?.t ?? 0
-        return max(SnapshotIO.ms(Date()), max(reqT, rvT) + 1)
+        let ubT = acl?.ub.first { $0.id == requester }?.t ?? 0
+        return max(SnapshotIO.ms(Date()), max(reqT, max(rvT, ubT)) + 1)
+    }
+
+    /// [id, t] 列表的并集合并：同设备取较大的 t，过期修剪 + 数量上限。
+    /// 用于 req/rv，也用于 v5.3 的 ub（强制解绑）/ wp（清除数据）——
+    /// 这两类记录只增不减，被解绑的设备不能用「并回旧值」的方式混进来。
+    private static func mergeReqs(_ l: [SyncSnapshot.ACL.Req]?, _ r: [SyncSnapshot.ACL.Req]?) -> [SyncSnapshot.ACL.Req] {
+        var map: [String: Int64] = [:]
+        for q in (l ?? []) + (r ?? []) { map[q.id] = max(map[q.id] ?? 0, q.t) }
+        let cutoff = SnapshotIO.ms(Date()) - revokeTTLms
+        return map
+            .filter { $0.value >= cutoff }
+            .sorted { ($0.key, $0.value) < ($1.key, $1.value) }
+            .suffix(adminCap)
+            .map { SyncSnapshot.ACL.Req(id: $0.key, t: $0.value) }
+    }
+
+    /// 掩码合并：每台设备一条，LWW（t 大者胜，t 相同按掩码值字典序决胜，两端必收敛）
+    private static func mergeMasks(_ l: [SyncSnapshot.ACL.Mask]?, _ r: [SyncSnapshot.ACL.Mask]?) -> [SyncSnapshot.ACL.Mask] {
+        var map: [String: SyncSnapshot.ACL.Mask] = [:]
+        for m in (l ?? []) + (r ?? []) {
+            if let old = map[m.id] {
+                if m.t != old.t { if m.t > old.t { map[m.id] = m } }
+                else if maskKey(m) > maskKey(old) { map[m.id] = m }
+            } else {
+                map[m.id] = m
+            }
+        }
+        return map.values.sorted { $0.id < $1.id }
+    }
+
+    private static func maskKey(_ m: SyncSnapshot.ACL.Mask) -> String {
+        "\(m.k)|\(m.c)|\(m.s)"
     }
 
     static func merge(local: SyncSnapshot.ACL?, remote: SyncSnapshot.ACL?, pendingOwner: String?) -> SyncSnapshot.ACL? {
@@ -208,7 +287,14 @@ enum SyncACLResolver {
             .filter { !writers.contains($0.key) && (rvSet[$0.key] ?? 0) < $0.value }
             .sorted { $0.value < $1.value }
             .map { SyncSnapshot.ACL.Req(id: $0.key, t: $0.value) }
-        return SyncSnapshot.ACL(owner: owner, writers: writers.sorted(), req: req, rv: rv)
+        // v5.3 设备管理：强制解绑 / 清除命令 / 共享掩码（只增不减，规则两端一致）
+        let ub = mergeReqs(local?.ub, remote?.ub)
+        let wp = mergeReqs(local?.wp, remote?.wp)
+        let sm = mergeMasks(local?.sm, remote?.sm)
+        // 被解绑的设备不再算 writer（解绑记录压住 writers 并集）
+        let ubSet = Set(ub.map(\.id))
+        let finalWriters = writers.filter { !ubSet.contains($0) }.sorted()
+        return SyncSnapshot.ACL(owner: owner, writers: finalWriters, req: req, rv: rv, ub: ub, wp: wp, sm: sm)
     }
 }
 
@@ -397,7 +483,19 @@ enum SnapshotIO {
 
     // MARK: 应用：快照 → SwiftData（按 id 增量更新，不重建容器）
 
-    static func apply(_ snap: SyncSnapshot, to ctx: ModelContext) throws {
+    /// 把快照落进本机数据库。maskedFor = 本机设备 id：
+    /// 非 owner 且 acl.sm 里有本机掩码时，按掩码过滤数据类别 ——
+    /// owner 关掉「胎动」后，对方设备上胎动记录不再落地、已有的也会被清掉。
+    /// 快照对象本身不改动（filtered 是副本），推送内容不受影响。
+    static func apply(_ snap0: SyncSnapshot, to ctx: ModelContext, maskedFor deviceID: String? = nil) throws {
+        var snap = snap0
+        if let deviceID = deviceID,
+           let acl = snap.acl, acl.owner != deviceID,
+           let mask = acl.mask(deviceID: deviceID) {
+            if mask.k == 0 { snap.ks = []; snap.ke = [] }
+            if mask.c == 0 { snap.cs = []; snap.ce = [] }
+            if mask.s == 0 { snap.st = nil }
+        }
         // 胎动轮次
         let remoteKS = Dictionary(snap.ks.map { (UUID(uuidString: $0.id) ?? UUID(), $0) },
                                   uniquingKeysWith: { a, _ in a })

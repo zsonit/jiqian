@@ -11,6 +11,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import com.jiqian.app.widget.Widgets
 
 /**
  * 配对同步引擎（与 iOS SyncManager.swift 逐条一致）。
@@ -207,7 +208,21 @@ object SyncManager {
             return out.sorted().joinToString(",")
         }
         return acl.optString("owner") + "|" + writers.sorted().joinToString(",") +
-            "|" + items("req") + "|" + items("rv")
+            "|" + items("req") + "|" + items("rv") +
+            "|" + items("ub") + "|" + items("wp") + "|" + masksKey(acl)
+    }
+
+    /** sm 掩码的规范化字符串（与顺序无关）：id:k|c|s|t，排序后拼接 */
+    private fun masksKey(acl: JSONObject?): String {
+        val out = mutableListOf<String>()
+        acl?.optJSONArray("sm")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                out.add(o.optString("id") + ":" + o.optInt("k", 1) + "|" + o.optInt("c", 1) +
+                    "|" + o.optInt("s", 1) + "|" + o.optLong("t", 0L))
+            }
+        }
+        return out.sorted().joinToString(",")
     }
 
     private fun setAclDirty(v: Boolean) {
@@ -542,6 +557,217 @@ object SyncManager {
         return if (r.ok) SyncResult(true, "配对成功：$c") else r
     }
 
+    // MARK: 设备管理（owner 专属，v5.3）
+    //
+    // A 端（创建配对码的手机）可以管理每台加入的 B 设备：
+    //   * 单独控制同步给它的数据类别（胎动 / 宫缩 / 共享设置）
+    //   * 强制解绑：对方自动解除配对（保留其本机数据），且不能用原码再加入
+    //   * 清除数据：对方联网后清空本机全部记录并解除配对
+    // 全部通过 acl 里的 ub / wp / sm 字段随加密快照同步，与 iOS 合并规则一致。
+
+    /** 本机是否为配对码创建者（只有它有管理权） */
+    fun isOwner(): Boolean {
+        if (pairedCode == null) return false
+        val acl = storedAcl() ?: return false
+        return acl.optString("owner") == deviceId()
+    }
+
+    /** 管理卡里要显示的设备（除本机与 owner 外的全部可写设备） */
+    fun managedDevices(): List<String> {
+        val acl = storedAcl() ?: return emptyList()
+        if (acl.optString("owner") != deviceId()) return emptyList()
+        val me = deviceId()
+        val owner = acl.optString("owner")
+        val out = mutableListOf<String>()
+        acl.optJSONArray("writers")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val id = arr.optString(i)
+                if (id.isNotEmpty() && id != me && id != owner) out.add(id)
+            }
+        }
+        return out.sorted()
+    }
+
+    /** 某台设备当前的数据同步掩码（没有条目 = 全部同步） */
+    fun maskFor(deviceId: String): JSONObject? = maskIn(storedAcl(), deviceId)
+
+    /** 从权限表里取某台设备的掩码（同设备取 t 更大的一条） */
+    private fun maskIn(acl: JSONObject?, id: String): JSONObject? {
+        var best: JSONObject? = null
+        acl?.optJSONArray("sm")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optString("id") != id) continue
+                if (best == null || o.optLong("t", 0L) > best!!.optLong("t", 0L)) best = o
+            }
+        }
+        return best
+    }
+
+    /** 改完 acl 后统一走「落盘 → 标记待推送 → 立即同步」 */
+    private fun pushAclChange(message: String): SyncResult {
+        setAclDirty(true)
+        val r = syncNow(manual = true)
+        return if (r.ok) SyncResult(true, message) else r
+    }
+
+    /** acl 里的 [id,t] 列表是否包含某设备 */
+    private fun aclHas(acl: JSONObject?, name: String, id: String): Boolean =
+        acl?.optJSONArray(name)?.let { arr ->
+            (0 until arr.length()).any { arr.optJSONObject(it)?.optString("id") == id }
+        } ?: false
+
+    /** 强制解绑一台设备：移出 writers、写解绑记录（只增不减） */
+    fun forceUnbind(id: String): SyncResult {
+        if (!isOwner()) return SyncResult(false, "只有创建配对码的手机可以管理设备")
+        if (id == deviceId()) return SyncResult(false, "不能解绑本机")
+        val acl = storedAcl() ?: JSONObject()
+            .put("owner", deviceId()).put("writers", JSONArray().put(deviceId())).put("req", JSONArray())
+        val me = deviceId()
+        val ub = JSONArray()
+        var t = System.currentTimeMillis()
+        acl.optJSONArray("ub")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") == id) t = maxOf(t, o.optLong("t", 0L) + 1)
+                else ub.put(o)
+            }
+        }
+        ub.put(JSONObject().put("id", id).put("t", t))
+        acl.put("ub", ub)
+        val writers = JSONArray()
+        acl.optJSONArray("writers")?.let { old ->
+            for (i in 0 until old.length()) if (old.optString(i) != id && old.optString(i) != me) writers.put(old.optString(i))
+        }
+        if (!writers.toString().contains("\"$me\"")) writers.put(me)
+        acl.put("writers", writers)
+        val req = JSONArray()
+        acl.optJSONArray("req")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != id) req.put(o)
+            }
+        }
+        acl.put("req", req)
+        saveAcl(acl)
+        return pushAclChange("已强制解绑：对方约 6 秒内停止同步，本机记录保留")
+    }
+
+    /** 清除一台设备的数据：移出 writers、写清除命令 + 解绑记录 */
+    fun wipeDevice(id: String): SyncResult {
+        if (!isOwner()) return SyncResult(false, "只有创建配对码的手机可以管理设备")
+        if (id == deviceId()) return SyncResult(false, "不能清除本机数据")
+        val acl = storedAcl() ?: JSONObject()
+            .put("owner", deviceId()).put("writers", JSONArray().put(deviceId())).put("req", JSONArray())
+        val me = deviceId()
+        val now = System.currentTimeMillis()
+        val ub = JSONArray()
+        var tUB = now
+        acl.optJSONArray("ub")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") == id) tUB = maxOf(tUB, o.optLong("t", 0L) + 1)
+                else ub.put(o)
+            }
+        }
+        ub.put(JSONObject().put("id", id).put("t", tUB))
+        acl.put("ub", ub)
+        val wp = JSONArray()
+        var tWP = now
+        acl.optJSONArray("wp")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") == id) tWP = maxOf(tWP, o.optLong("t", 0L) + 1)
+                else wp.put(o)
+            }
+        }
+        wp.put(JSONObject().put("id", id).put("t", tWP))
+        acl.put("wp", wp)
+        val writers = JSONArray()
+        acl.optJSONArray("writers")?.let { old ->
+            for (i in 0 until old.length()) if (old.optString(i) != id && old.optString(i) != me) writers.put(old.optString(i))
+        }
+        if (!writers.toString().contains("\"$me\"")) writers.put(me)
+        acl.put("writers", writers)
+        val req = JSONArray()
+        acl.optJSONArray("req")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != id) req.put(o)
+            }
+        }
+        acl.put("req", req)
+        saveAcl(acl)
+        return pushAclChange("已下发清除：对方联网后本机记录将被清空并解除配对")
+    }
+
+    /** 更新某台设备的数据同步掩码（胎动 / 宫缩 / 共享设置三选，LWW 合并） */
+    fun setShareMask(id: String, kick: Boolean, contraction: Boolean, settings: Boolean): SyncResult {
+        if (!isOwner()) return SyncResult(false, "只有创建配对码的手机可以管理设备")
+        if (id == deviceId()) return SyncResult(false, "本机不受同步范围限制")
+        val acl = storedAcl() ?: JSONObject()
+            .put("owner", deviceId()).put("writers", JSONArray().put(deviceId())).put("req", JSONArray())
+        val sm = JSONArray()
+        var t = System.currentTimeMillis()
+        acl.optJSONArray("sm")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") == id) t = maxOf(t, o.optLong("t", 0L) + 1)
+                else sm.put(o)
+            }
+        }
+        sm.put(JSONObject()
+            .put("id", id)
+            .put("k", if (kick) 1 else 0)
+            .put("c", if (contraction) 1 else 0)
+            .put("s", if (settings) 1 else 0)
+            .put("t", t))
+        acl.put("sm", sm)
+        saveAcl(acl)
+        return pushAclChange("已更新同步范围：对方约 6 秒内生效")
+    }
+
+    // MARK: B 端：处理 owner 下发的管理动作
+
+    /** 清空本机全部记录（不写墓碑、不触发上传——马上就要解除配对了，
+     *  云端与其他设备的记录不受影响） */
+    private fun wipeAllLocalData() {
+        val ctx = appContext ?: return
+        Store.replaceAll(ctx, emptyList(), emptyList())
+        Store.setRunningContractionStart(ctx, 0L)
+        saveExtra(JSONObject())
+        prefs()?.edit()?.putLong(KEY_CL, 0L)?.putString(KEY_DEL, "[]")?.apply()
+        // 桌面组件就地刷新，别留着已清空的旧数字
+        Widgets.refresh(ctx)
+        AppLog.i("管理员清除：本机全部记录已删除")
+    }
+
+    /** 检查云端权限表里有没有指向本机的管理动作（清除数据 / 强制解绑）。
+     *  返回 null = 没有动作，继续正常同步；有动作则已就地处理（清库 / 解绑 + 通知），
+     *  调用方直接返回、绝不推送 —— 防止把本机（可能已清空的）数据盖回云端。 */
+    private fun handleAdminAction(state: JSONObject): SyncResult? {
+        val acl = state.optJSONObject("acl") ?: return null
+        val me = deviceId()
+        // 清除数据（隐含解绑）：清空本机记录 + 解除配对
+        if (aclHas(acl, "wp", me)) {
+            wipeAllLocalData()
+            appContext?.let {
+                SyncNotifier.notifyAdminAction(it, "管理员已清除本机数据", "记录已全部清空，配对已解除")
+            }
+            unlink()
+            return SyncResult(false, "管理员已清除本机数据，配对已解除")
+        }
+        // 强制解绑：保留本机记录，解除配对（被解绑后原配对码也不能再加入）
+        if (aclHas(acl, "ub", me)) {
+            appContext?.let {
+                SyncNotifier.notifyAdminAction(it, "已被管理员解绑", "同步已停止，本机记录保留；重新配对请联系创建者")
+            }
+            unlink()
+            return SyncResult(false, "已被管理员解绑：同步已停止，本机记录保留")
+        }
+        return null
+    }
+
     /**
      * 解除配对：只停止同步。本机记录、云端记录全部保留，只是不再互通。
      * 多部手机共用一个配对码时（准爸爸、长辈等），任何一台退出都不影响其他人。
@@ -817,26 +1043,88 @@ object SyncManager {
                 .filter { it.key !in writers && (rvMap[it.key] ?: 0L) < it.value }
                 .sortedBy { it.value }
                 .forEach { (id, t) -> req.put(JSONObject().put("id", id).put("t", t)) }
+
+            // v5.3 设备管理：ub 强制解绑 / wp 清除命令（[id,t] 并集取最大 t，只增不减，
+            // 180 天过期、200 条上限，与撤销记录同规则）；sm 掩码（每台一条，LWW t 大者胜）。
+            // 被解绑的设备从 writers 并集里剔除，防止其他端的旧权限表把它并回来。
+            fun mergeReqList(name: String): JSONArray {
+                val map = linkedMapOf<String, Long>()
+                listOf(la, ra).forEach { a ->
+                    a?.optJSONArray(name)?.let { arr ->
+                        for (i in 0 until arr.length()) {
+                            val o = arr.optJSONObject(i) ?: continue
+                            val id = o.optString("id")
+                            map[id] = maxOf(map[id] ?: 0L, o.optLong("t", 0L))
+                        }
+                    }
+                }
+                val cutoff = System.currentTimeMillis() - TOMBSTONE_TTL
+                val outArr = JSONArray()
+                map.entries.filter { it.value >= cutoff }.sortedBy { it.value }
+                    .takeLast(RV_CAP)
+                    .forEach { (id, t) -> outArr.put(JSONObject().put("id", id).put("t", t)) }
+                return outArr
+            }
+            val ub = mergeReqList("ub")
+            val wp = mergeReqList("wp")
+            val ubIds = mutableSetOf<String>()
+            for (i in 0 until ub.length()) ubIds.add(ub.optJSONObject(i)?.optString("id") ?: "")
+            val finalWriters = JSONArray()
+            writers.filter { it !in ubIds }.sorted().forEach { finalWriters.put(it) }
+            val smMap = linkedMapOf<String, JSONObject>()
+            listOf(la, ra).forEach { a ->
+                a?.optJSONArray("sm")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val id = o.optString("id")
+                        val cur = smMap[id]
+                        if (cur == null) smMap[id] = o
+                        else if (o.optLong("t", 0L) > cur.optLong("t", 0L)) smMap[id] = o
+                    }
+                }
+            }
+            val sm = JSONArray()
+            smMap.entries.sortedBy { it.key }.forEach { sm.put(it.value) }
+
             out.put("acl", JSONObject()
                 .put("owner", owner)
-                .put("writers", JSONArray().apply { writers.sorted().forEach { put(it) } })
+                .put("writers", finalWriters)
                 .put("req", req)
-                .put("rv", rv))
+                .put("rv", rv)
+                .put("ub", ub)
+                .put("wp", wp)
+                .put("sm", sm))
         }
         return out
     }
 
-    /** 把快照写回本机（Store + 标记），由后台同步线程调用；Store 写入不触发 onDataChanged */
-    private fun applySnapshot(snap: JSONObject) {
+    /** 把快照写回本机（Store + 标记），由后台同步线程调用；Store 写入不触发 onDataChanged。
+     *  v5.3：本机不是 owner 且 acl.sm 里有本机掩码时，按掩码过滤要落地的数据类别 ——
+     *  owner 关掉「胎动」后，本机胎动不再落地、已有的会被清空。过滤只影响写入本机的
+     *  副本，绝不动原快照（推送内容不受影响）。 */
+    private fun applySnapshot(snap0: JSONObject) {
         val ctx = appContext ?: return
+        var keArr = snap0.optJSONArray("ke")
+        var ceArr = snap0.optJSONArray("ce")
+        var ksArr = snap0.optJSONArray("ks")
+        var csArr = snap0.optJSONArray("cs")
+        var stObj = snap0.optJSONObject("st")
+        val aclForMask = snap0.optJSONObject("acl")
+        if (aclForMask != null && aclForMask.optString("owner") != deviceId()) {
+            maskIn(aclForMask, deviceId())?.let { mask ->
+                if (mask.optInt("k", 1) == 0) { keArr = JSONArray(); ksArr = JSONArray() }
+                if (mask.optInt("c", 1) == 0) { ceArr = JSONArray(); csArr = JSONArray() }
+                if (mask.optInt("s", 1) == 0) stObj = null
+            }
+        }
         val kicks = mutableListOf<Long>()
-        snap.optJSONArray("ke")?.let { arr ->
+        keArr?.let { arr ->
             for (i in 0 until arr.length()) {
                 arr.optJSONObject(i)?.let { kicks.add(it.optLong("at", 0L)) }
             }
         }
         val ctns = mutableListOf<Pair<Long, Long>>()
-        snap.optJSONArray("ce")?.let { arr ->
+        ceArr?.let { arr ->
             for (i in 0 until arr.length()) {
                 arr.optJSONObject(i)?.let { o ->
                     ctns.add(o.optLong("s", 0L) to o.optLong("e", 0L))
@@ -845,19 +1133,19 @@ object SyncManager {
         }
         Store.replaceAll(ctx, kicks.sorted(), ctns.sortedBy { it.first })
         val ex = JSONObject()
-        snap.optJSONArray("ks")?.let { if (it.length() > 0) ex.put("ks", it) }
-        snap.optJSONArray("cs")?.let { if (it.length() > 0) ex.put("cs", it) }
+        ksArr?.let { if (it.length() > 0) ex.put("ks", it) }
+        csArr?.let { if (it.length() > 0) ex.put("cs", it) }
         saveExtra(ex)
         prefs()?.edit()
-            ?.putLong(KEY_CL, snap.optLong("cl", 0L))
-            ?.putString(KEY_DEL, pruneTombstones(snap.optJSONArray("del") ?: JSONArray()).toString())
+            ?.putLong(KEY_CL, snap0.optLong("cl", 0L))
+            ?.putString(KEY_DEL, pruneTombstones(snap0.optJSONArray("del") ?: JSONArray()).toString())
             ?.apply()
         // 权限表随快照落地，并刷新可写状态（被授权/被批准时立即生效）
-        snap.optJSONObject("acl")?.let { refreshAccess(it) }
+        snap0.optJSONObject("acl")?.let { refreshAccess(it) }
         // 共享设置：整段原样保存（win/risks/prov/phone 安卓不展示也要透传），
         // 已知字段（预产期、每轮时长）落到各自偏好；比本机旧的不覆盖，
         // 避免刚改好又被对方旧值弹回去
-        snap.optJSONObject("st")?.let { st ->
+        stObj?.let { st ->
             val t = st.optLong("t", 0L)
             val curT = sharedSt()?.optLong("t", 0L) ?: 0L
             if (t >= curT) {
@@ -910,6 +1198,8 @@ object SyncManager {
                 }
                 return SyncResult(false, resp.message)
             }
+            // owner 下发的管理动作（清除 / 解绑）优先于一切数据同步
+            handleAdminAction(remote.state)?.let { return it }
             applySnapshot(remote.state)
             refreshAccess(remote.state.optJSONObject("acl"))
             markSynced()
@@ -927,6 +1217,9 @@ object SyncManager {
                 return SyncResult(false, msg)
             }
             val localCanEdit = computeCanEdit()
+            // owner 下发的管理动作（清除 / 解绑）优先于一切数据同步：
+            // 命中就就地处理并返回，绝不推送（防止把本机数据盖回云端）
+            if (remote != null) handleAdminAction(remote.state)?.let { return it }
             var merged = local
             // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
             var mustPush = localDirty || lastRev == 0L || remote?.updatedBy == EMPTY

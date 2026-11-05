@@ -57,6 +57,21 @@ final class SyncNotifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// 提醒本机被 owner 管理动作处理（强制解绑 / 清除数据）。v5.3
+    func notifyAdminAction(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.threadIdentifier = "jiqian.acl"
+        let request = UNNotificationRequest(identifier: "jiqian.admin.\(SnapshotIO.ms(Date()))",
+                                            content: content,
+                                            trigger: nil)
+        center.add(request) { error in
+            if let error { AppLog.w("Notify", "通知发送失败：\(error.localizedDescription)") }
+        }
+    }
+
     // MARK: UNUserNotificationCenterDelegate
 
     /// App 在前台时也显示横幅 + 声音（默认前台不显示）

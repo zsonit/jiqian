@@ -18,3 +18,11 @@ Payload/
 
 # 临时脚本
 _mkicon.py
+
+# Gradle
+android/.gradle/
+android/app/build/
+android/local.properties
+
+# 本地产物
+dist/

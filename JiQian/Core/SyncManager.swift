@@ -315,6 +315,135 @@ final class SyncManager: ObservableObject {
         return r.ok ? SyncOutcome(ok: true, message: "已忽略该申请") : r
     }
 
+    // MARK: 设备管理（owner 专属，v5.3）
+    //
+    // A 端（创建配对码的手机）可以管理每台加入的 B 设备：
+    //   * 单独控制同步给它的数据类别（胎动 / 宫缩 / 共享设置）
+    //   * 强制解绑：对方自动解除配对（保留其本机数据），且不能用原码再加入
+    //   * 清除数据：对方联网后清空本机全部记录并解除配对
+    // 全部通过 acl 里的 ub / wp / sm 字段随加密快照同步，双端合并规则一致。
+
+    /// 本机是否为配对码创建者（只有它有管理权）
+    var isOwner: Bool {
+        guard pairedCode != nil, let acl = storedACL() else { return false }
+        return acl.owner == deviceId
+    }
+
+    /// 管理卡里要显示的设备（除本机与 owner 外的全部可写设备）
+    var managedDevices: [String] {
+        guard let acl = storedACL(), acl.owner == deviceId else { return [] }
+        return acl.writers.filter { $0 != deviceId && $0 != acl.owner }.sorted()
+    }
+
+    /// 某台设备当前的数据同步掩码（没有条目 = 全部同步）
+    func maskFor(_ deviceID: String) -> SyncSnapshot.ACL.Mask? {
+        storedACL()?.mask(deviceID: deviceID)
+    }
+
+    /// 改完 acl 后统一走「落盘 → 标记待推送 → 立即同步」
+    private func pushAclChange(message: String) -> SyncOutcome {
+        Self.defaults.set(true, forKey: Self.keyACLDirty)
+        let r = syncNow(manual: true)
+        return r.ok ? SyncOutcome(ok: true, message: message) : r
+    }
+
+    /// 强制解绑一台设备：移出 writers、写解绑记录（只增不减）。
+    /// 对方约 6 秒内自动解除配对（保留其本机数据），且不能用原码再加入。
+    func forceUnbind(_ deviceID: String) -> SyncOutcome {
+        guard isOwner else { return SyncOutcome(ok: false, message: "只有创建配对码的手机可以管理设备") }
+        guard deviceID != deviceId else { return SyncOutcome(ok: false, message: "不能解绑本机") }
+        var aclv = storedACL() ?? SyncSnapshot.ACL(owner: deviceId, writers: [deviceId], req: [])
+        let t = max(SnapshotIO.ms(Date()), (aclv.ub.first { $0.id == deviceID }?.t ?? 0) + 1)
+        aclv.writers.removeAll { $0 == deviceID }
+        aclv.req.removeAll { $0.id == deviceID }
+        aclv.ub.removeAll { $0.id == deviceID }
+        aclv.ub.append(SyncSnapshot.ACL.Req(id: deviceID, t: t))
+        saveACL(aclv)
+        return pushAclChange(message: "已强制解绑：对方约 6 秒内停止同步，本机记录保留")
+    }
+
+    /// 清除一台设备的数据：移出 writers、写清除命令 + 解绑记录。
+    /// 对方联网后清空本机全部记录并自动解除配对；云端与其他设备的记录不受影响。
+    func wipeDevice(_ deviceID: String) -> SyncOutcome {
+        guard isOwner else { return SyncOutcome(ok: false, message: "只有创建配对码的手机可以管理设备") }
+        guard deviceID != deviceId else { return SyncOutcome(ok: false, message: "不能清除本机数据") }
+        var aclv = storedACL() ?? SyncSnapshot.ACL(owner: deviceId, writers: [deviceId], req: [])
+        let now = SnapshotIO.ms(Date())
+        let tUB = max(now, (aclv.ub.first { $0.id == deviceID }?.t ?? 0) + 1)
+        let tWP = max(now, (aclv.wp.first { $0.id == deviceID }?.t ?? 0) + 1)
+        aclv.writers.removeAll { $0 == deviceID }
+        aclv.req.removeAll { $0.id == deviceID }
+        aclv.ub.removeAll { $0.id == deviceID }
+        aclv.ub.append(SyncSnapshot.ACL.Req(id: deviceID, t: tUB))
+        aclv.wp.removeAll { $0.id == deviceID }
+        aclv.wp.append(SyncSnapshot.ACL.Req(id: deviceID, t: tWP))
+        saveACL(aclv)
+        return pushAclChange(message: "已下发清除：对方联网后本机记录将被清空并解除配对")
+    }
+
+    /// 更新某台设备的数据同步掩码（胎动 / 宫缩 / 共享设置三选，LWW 合并）
+    func setShareMask(_ deviceID: String, kick: Bool, contraction: Bool, settings: Bool) -> SyncOutcome {
+        guard isOwner else { return SyncOutcome(ok: false, message: "只有创建配对码的手机可以管理设备") }
+        guard deviceID != deviceId else { return SyncOutcome(ok: false, message: "本机不受同步范围限制") }
+        var aclv = storedACL() ?? SyncSnapshot.ACL(owner: deviceId, writers: [deviceId], req: [])
+        let t = max(SnapshotIO.ms(Date()), (aclv.sm.first { $0.id == deviceID }?.t ?? 0) + 1)
+        let mask = SyncSnapshot.ACL.Mask(id: deviceID,
+                                         k: kick ? 1 : 0,
+                                         c: contraction ? 1 : 0,
+                                         s: settings ? 1 : 0,
+                                         t: t)
+        aclv.sm.removeAll { $0.id == deviceID }
+        aclv.sm.append(mask)
+        saveACL(aclv)
+        return pushAclChange(message: "已更新同步范围：对方约 6 秒内生效")
+    }
+
+    // MARK: B 端：处理 owner 下发的管理动作
+
+    /// 本机被 owner 强制解绑 / 清除数据时的本地通知
+    private func notifyAdminAction(title: String, body: String) {
+        SyncNotifier.shared.notifyAdminAction(title: title, body: body)
+    }
+
+    /// 清空本机全部记录（不写墓碑、不触发上传——马上就要解除配对了，
+    /// 云端与其他设备的记录不受影响）
+    private func wipeAllLocalData() {
+        let ctx = ModelContext(JiQianStore.container)
+        ctx.autosaveEnabled = false
+        for event in (try? ctx.fetch(FetchDescriptor<KickEvent>())) ?? [] { ctx.delete(event) }
+        for event in (try? ctx.fetch(FetchDescriptor<ContractionEvent>())) ?? [] { ctx.delete(event) }
+        for session in (try? ctx.fetch(FetchDescriptor<KickSession>())) ?? [] { ctx.delete(session) }
+        for session in (try? ctx.fetch(FetchDescriptor<ContractionSession>())) ?? [] { ctx.delete(session) }
+        try? ctx.save()
+        // 本机的清空戳 / 墓碑也一并清掉：这台设备从此是干净状态
+        Self.defaults.removeObject(forKey: Self.keyClearedAt)
+        Self.defaults.removeObject(forKey: Self.keyTombstones)
+        AppLog.i("Sync", "管理员清除：本机全部记录已删除")
+    }
+
+    /// 检查云端权限表里有没有指向本机的管理动作（清除数据 / 强制解绑）。
+    /// 返回 nil = 没有动作，继续正常同步；有动作则已就地处理（清库 / 解绑 + 通知），
+    /// 调用方直接返回、绝不推送 —— 防止把本机（可能已清空的）数据盖回云端。
+    private func handleAdminCommands(in state: SyncSnapshot) -> SyncOutcome? {
+        guard let acl = state.acl else { return nil }
+        // 清除数据（隐含解绑）：清空本机记录 + 解除配对
+        if acl.wipeCommand(deviceID: deviceId) != nil {
+            wipeAllLocalData()
+            notifyAdminAction(title: "管理员已清除本机数据",
+                              body: "记录已全部清空，配对已解除")
+            clearLocal()
+            return SyncOutcome(ok: false, message: "管理员已清除本机数据，配对已解除")
+        }
+        // 强制解绑：保留本机记录，解除配对（被解绑后原配对码也不能再加入）
+        if acl.unbound(deviceID: deviceId) {
+            notifyAdminAction(title: "已被管理员解绑",
+                              body: "同步已停止，本机记录保留；重新配对请联系创建者")
+            clearLocal()
+            return SyncOutcome(ok: false, message: "已被管理员解绑：同步已停止，本机记录保留")
+        }
+        return nil
+    }
+
     // MARK: 配对
 
     func createPairing() -> SyncOutcome {
@@ -488,8 +617,12 @@ final class SyncManager: ObservableObject {
                 markSynced()
                 return SyncOutcome(ok: true, message: manual ? "已就绪，等待对方数据" : "")
             }
+            // owner 下发的管理动作（清除 / 解绑）优先于一切数据同步
+            if let admin = handleAdminCommands(in: snapshot.state) {
+                return admin
+            }
             do {
-                try SnapshotIO.apply(snapshot.state, to: ctx)
+                try SnapshotIO.apply(snapshot.state, to: ctx, maskedFor: deviceId)
             } catch {
                 AppLog.e("Sync", "应用对方数据失败：\(error)")
                 return SyncOutcome(ok: false, message: "应用对方数据失败")
@@ -514,6 +647,11 @@ final class SyncManager: ObservableObject {
         // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
         var mustPush = localDirty || lastRev == 0 || remoteSnapshot?.updatedBy == Self.empty
         if let snapshot = remoteSnapshot {
+            // owner 下发的管理动作（清除 / 解绑）优先于一切数据同步：
+            // 命中就就地处理并返回，绝不推送（防止把本机数据盖回云端）
+            if let admin = handleAdminCommands(in: snapshot.state) {
+                return admin
+            }
             merged = SnapshotIO.merge(local: local, remote: snapshot.state)
             // 权限表合并（两端规则一致）：owner 以云端为准、writers 并集、申请并集减去已授权
             merged.acl = SyncACLResolver.merge(local: local.acl,
@@ -525,7 +663,7 @@ final class SyncManager: ObservableObject {
             if isAclDirty() && merged.acl != snapshot.state.acl { mustPush = true }
             if merged != local {
                 do {
-                    try SnapshotIO.apply(merged, to: ctx)
+                    try SnapshotIO.apply(merged, to: ctx, maskedFor: deviceId)
                 } catch {
                     AppLog.e("Sync", "应用合并结果失败：\(error)")
                     return SyncOutcome(ok: false, message: "应用合并结果失败")

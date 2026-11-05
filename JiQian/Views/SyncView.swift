@@ -12,6 +12,9 @@ struct SyncView: View {
     @State private var joinText = ""
     @State private var running = false
     @State private var toast: String?
+    /// 设备管理：待确认的动作目标（强制解绑 / 清除数据）
+    @State private var unbindTarget: String?
+    @State private var wipeTarget: String?
 
     private var code: String? { sync.pairedCode }
 
@@ -33,6 +36,30 @@ struct SyncView: View {
         .background(Pal.bg.ignoresSafeArea())
         .navigationTitle("☁️ 配对同步")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("强制解绑设备 \(unbindTarget ?? "")？",
+                            isPresented: Binding(get: { unbindTarget != nil },
+                                                 set: { if !$0 { unbindTarget = nil } }),
+                            titleVisibility: .visible) {
+            Button("强制解绑", role: .destructive) {
+                if let d = unbindTarget { run { sync.forceUnbind(d) } }
+                unbindTarget = nil
+            }
+            Button("取消", role: .cancel) { unbindTarget = nil }
+        } message: {
+            Text("对方将立即停止同步（对方本机已同步的数据保留），且无法再用这个配对码加入。")
+        }
+        .confirmationDialog("清除设备 \(wipeTarget ?? "") 的数据？",
+                            isPresented: Binding(get: { wipeTarget != nil },
+                                                 set: { if !$0 { wipeTarget = nil } }),
+                            titleVisibility: .visible) {
+            Button("清除对方数据", role: .destructive) {
+                if let d = wipeTarget { run { sync.wipeDevice(d) } }
+                wipeTarget = nil
+            }
+            Button("取消", role: .cancel) { wipeTarget = nil }
+        } message: {
+            Text("对方手机联网后会清空全部胎动与宫缩记录并自动解除配对；本机与云端的记录不受影响。")
+        }
         .overlay(alignment: .bottom) {
             if let toast {
                 Text(toast)
@@ -128,6 +155,9 @@ struct SyncView: View {
             }
 
             permissionCard
+            if sync.isOwner && !sync.managedDevices.isEmpty {
+                deviceManageCard
+            }
             syncStatusCard
         }
     }
@@ -248,6 +278,105 @@ struct SyncView: View {
 
     private var myDeviceID: String { SyncManager.shared.deviceID }
 
+    // MARK: 设备管理卡（只有创建配对码的手机能看到，v5.3）
+
+    private var deviceManageCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Pal.brand)
+                    Text("设备管理")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(Pal.ink)
+                    Spacer()
+                }
+                Text("单独控制同步给每台手机的内容；也可以强制解绑，或清空对方的数据")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Pal.ink3)
+                    .lineSpacing(3)
+                ForEach(sync.managedDevices, id: \.self) { dev in
+                    deviceRow(dev)
+                }
+            }
+        }
+    }
+
+    private func deviceRow(_ dev: String) -> some View {
+        let mask = sync.maskFor(dev)
+        let kickOn = mask?.k != 0
+        let ctnOn = mask?.c != 0
+        let setOn = mask?.s != 0
+        return VStack(alignment: .leading, spacing: 8) {
+            Rectangle().fill(Pal.line).frame(height: 1)
+            HStack {
+                Text("设备 \(dev)")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Pal.ink)
+                Spacer()
+                Text((mask == nil || (kickOn && ctnOn && setOn)) ? "全部同步" : "部分同步")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Pal.ink3)
+            }
+            // 同步范围开关：点一下即切换，约 6 秒内对对方生效
+            HStack(spacing: 8) {
+                maskChip("胎动", on: kickOn) {
+                    run { sync.setShareMask(dev, kick: !kickOn, contraction: ctnOn, settings: setOn) }
+                }
+                maskChip("宫缩", on: ctnOn) {
+                    run { sync.setShareMask(dev, kick: kickOn, contraction: !ctnOn, settings: setOn) }
+                }
+                maskChip("设置", on: setOn) {
+                    run { sync.setShareMask(dev, kick: kickOn, contraction: ctnOn, settings: !setOn) }
+                }
+                Spacer()
+            }
+            HStack(spacing: 10) {
+                Button {
+                    unbindTarget = dev
+                } label: {
+                    Text("强制解绑")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Pal.danger)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .strokeBorder(Pal.danger.opacity(0.55), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    wipeTarget = dev
+                } label: {
+                    Text("清除数据")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Pal.danger))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func maskChip(_ label: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(on ? Pal.brand : Pal.ink3)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(on ? Pal.brandSoft : Pal.bg))
+            .overlay(Capsule().strokeBorder(Pal.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
     private func reqTime(_ ms: Int64) -> String {
         let f = DateFormatter()
         f.dateFormat = "MM-dd HH:mm"
@@ -309,7 +438,7 @@ struct SyncView: View {
 
     private var notesCard: some View {
         card {
-            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n* 对方申请编辑权限时，这台手机会弹通知，首页顶部也会出现「点此审批」横幅；点开即可同意或忽略\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
+            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n* 对方申请编辑权限时，这台手机会弹通知，首页顶部也会出现「点此审批」横幅；点开即可同意或忽略\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 设备管理（创建者专属）：可单独控制同步给某台手机的胎动 / 宫缩 / 设置，也可强制解绑或清空对方的数据；被解绑的设备不能用原码再加入\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
                 .font(.system(size: 11))
                 .foregroundStyle(Pal.ink3)
                 .lineSpacing(3)

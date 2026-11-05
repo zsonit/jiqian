@@ -60,4 +60,18 @@ object SyncNotifier {
         // 没有通知权限时静默失败即可（App 内还有横幅和角标）
         runCatching { nm.notify(NOTIFY_ID, notification) }
     }
+
+    /** 提醒本机被 owner 管理动作处理（强制解绑 / 清除数据）。v5.3 */
+    fun notifyAdminAction(ctx: Context, title: String, body: String) {
+        ensureChannel(ctx)
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notification = Notification.Builder(ctx, CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(Notification.BigTextStyle().bigText(body))
+            .setAutoCancel(true)
+            .build()
+        runCatching { nm.notify(NOTIFY_ID + 1, notification) }
+    }
 }

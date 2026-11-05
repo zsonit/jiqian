@@ -1,6 +1,8 @@
 package com.jiqian.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -141,6 +143,23 @@ fun SyncScreen(onClose: () -> Unit) {
                 onDeny = { id -> run { SyncManager.denyRequest(id) } },
             )
 
+            // v5.3 设备管理：只有创建配对码的手机可见（权限表变化时随 aclVersion 刷新）
+            val manageVersion = SyncManager.aclVersion
+            val devices = remember(manageVersion) { SyncManager.managedDevices() }
+            val masks = remember(manageVersion) {
+                devices.associateWith { SyncManager.maskFor(it) }
+            }
+            if (SyncManager.isOwner() && devices.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                DeviceManageCard(
+                    devices = devices,
+                    masks = masks,
+                    onSetMask = { id, k, c, s -> run { SyncManager.setShareMask(id, k, c, s) } },
+                    onUnbind = { id -> run { SyncManager.forceUnbind(id) } },
+                    onWipe = { id -> run { SyncManager.wipeDevice(id) } },
+                )
+            }
+
             Spacer(Modifier.height(12.dp))
             Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
                 Column(Modifier.padding(16.dp)) {
@@ -187,6 +206,7 @@ fun SyncScreen(onClose: () -> Unit) {
                     "* 各自新增的记录都会保留；同一处改动，后改的生效\n" +
                     "* 「撤销上一次」「清空记录」也会同步到对端\n" +
                     "* 解除配对只会停止同步：本机与云端的记录都保留\n" +
+                    "* 设备管理（创建者专属）：可单独控制同步给某台手机的胎动 / 宫缩 / 设置，也可强制解绑或清空对方的数据；被解绑的设备不能用原码再加入\n" +
                     "* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n" +
                     "* 配对码就是唯一的钥匙，请只告诉家人",
                 fontSize = 11.sp, color = Ink2, lineHeight = 16.sp, modifier = Modifier.padding(16.dp)
@@ -282,4 +302,132 @@ fun PermissionCard(
             }
         }
     }
+}
+
+// ---------- 设备管理卡（创建者专属，v5.3）----------
+// 对每台加入的手机：单独开关同步给它的胎动 / 宫缩 / 设置；
+// 也可以强制解绑（对方保留本机数据、停止同步）或清除数据（对方清空记录并解除配对）。
+
+@Composable
+fun DeviceManageCard(
+    devices: List<String>,
+    masks: Map<String, JSONObject?>,
+    onSetMask: (String, Boolean, Boolean, Boolean) -> Unit,
+    onUnbind: (String) -> Unit,
+    onWipe: (String) -> Unit,
+) {
+    var confirmUnbind by remember { mutableStateOf<String?>(null) }
+    var confirmWipe by remember { mutableStateOf<String?>(null) }
+
+    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+        Column(Modifier.padding(16.dp)) {
+            Text("设备管理", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+            Text(
+                "单独控制同步给每台手机的内容；也可以强制解绑，或清空对方的数据",
+                fontSize = 12.sp, color = Ink2, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp)
+            )
+            devices.forEach { dev ->
+                val mask = masks[dev]
+                val kickOn = mask?.optInt("k", 1) != 0
+                val ctnOn = mask?.optInt("c", 1) != 0
+                val setOn = mask?.optInt("s", 1) != 0
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Ink.copy(alpha = 0.08f))
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("设备 $dev", fontSize = 13.sp, color = Ink, modifier = Modifier.weight(1f))
+                    Text(
+                        if (mask == null || (kickOn && ctnOn && setOn)) "全部同步" else "部分同步",
+                        fontSize = 11.sp, color = Ink2
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MaskChip("胎动", kickOn) { onSetMask(dev, !kickOn, ctnOn, setOn) }
+                    MaskChip("宫缩", ctnOn) { onSetMask(dev, kickOn, !ctnOn, setOn) }
+                    MaskChip("设置", setOn) { onSetMask(dev, kickOn, ctnOn, !setOn) }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { confirmUnbind = dev },
+                        enabled = true,
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = Danger
+                        ),
+                        border = BorderStroke(1.dp, Danger.copy(alpha = 0.55f)),
+                        modifier = Modifier.weight(1f).height(40.dp)
+                    ) { Text("强制解绑", fontSize = 12.5.sp, fontWeight = FontWeight.Bold) }
+                    Button(
+                        onClick = { confirmWipe = dev },
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(containerColor = Danger),
+                        modifier = Modifier.weight(1f).height(40.dp)
+                    ) { Text("清除数据", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+                }
+            }
+        }
+    }
+
+    confirmUnbind?.let { dev ->
+        AlertDialog(
+            onDismissRequest = { confirmUnbind = null },
+            title = { Text("强制解绑设备 $dev？", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "对方将立即停止同步（对方本机已同步的数据保留），且无法再用这个配对码加入。",
+                    fontSize = 13.sp, lineHeight = 19.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onUnbind(dev); confirmUnbind = null }) {
+                    Text("强制解绑", color = Danger, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUnbind = null }) { Text("取消") }
+            },
+        )
+    }
+    confirmWipe?.let { dev ->
+        AlertDialog(
+            onDismissRequest = { confirmWipe = null },
+            title = { Text("清除设备 $dev 的数据？", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "对方手机联网后会清空全部胎动与宫缩记录并自动解除配对；本机与云端的记录不受影响。",
+                    fontSize = 13.sp, lineHeight = 19.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onWipe(dev); confirmWipe = null }) {
+                    Text("清除对方数据", color = Danger, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmWipe = null }) { Text("取消") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun MaskChip(label: String, on: Boolean, onClick: () -> Unit) {
+    Text(
+        if (on) "✓ $label" else "○ $label",
+        fontSize = 12.sp,
+        color = if (on) Brand else Ink2,
+        modifier = Modifier
+            .background(if (on) Brand.copy(alpha = 0.12f) else Color.Transparent, RoundedCornerShape(50))
+            .border(1.dp, if (on) Color.Transparent else Ink.copy(alpha = 0.15f), RoundedCornerShape(50))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+    )
 }
