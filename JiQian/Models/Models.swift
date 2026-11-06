@@ -76,6 +76,33 @@ final class KickEvent {
     var source: RecordSource { RecordSource(rawValue: sourceRaw) ?? .app }
 }
 
+/// 一次体重记录（孕妇自己称重后录入）。只存事实：时间 + 公斤数，
+/// 不做任何增减建议或健康判断。随配对同步走，与胎动 / 宫缩同一套端到端加密。
+@Model
+final class WeightEntry {
+    var id: UUID = UUID()
+    /// 称重时间（默认记当下，可回填当天早些时候）
+    var at: Date = Date()
+    /// 体重（公斤），保留 1 位小数
+    var kg: Double = 0
+    /// 备注（可空），例如「产检当天」「饭后」
+    var note: String?
+    var sourceRaw: String = RecordSource.app.rawValue
+
+    init(id: UUID = UUID(),
+         at: Date = Date(),
+         kg: Double = 0,
+         source: RecordSource = .app) {
+        self.id = id
+        self.at = at
+        self.kg = kg
+        self.note = nil
+        self.sourceRaw = source.rawValue
+    }
+
+    var source: RecordSource { RecordSource(rawValue: sourceRaw) ?? .app }
+}
+
 /// 一次宫缩记录会话（一次就诊周期内的连续计时）
 @Model
 final class ContractionSession {

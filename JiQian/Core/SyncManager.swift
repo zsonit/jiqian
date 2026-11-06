@@ -381,8 +381,9 @@ final class SyncManager: ObservableObject {
         return pushAclChange(message: "已下发清除：对方联网后本机记录将被清空并解除配对")
     }
 
-    /// 更新某台设备的数据同步掩码（胎动 / 宫缩 / 共享设置三选，LWW 合并）
-    func setShareMask(_ deviceID: String, kick: Bool, contraction: Bool, settings: Bool) -> SyncOutcome {
+    /// 更新某台设备的数据同步掩码（胎动 / 宫缩 / 设置 / 体重，LWW 合并）
+    func setShareMask(_ deviceID: String, kick: Bool, contraction: Bool,
+                      settings: Bool, weight: Bool) -> SyncOutcome {
         guard isOwner else { return SyncOutcome(ok: false, message: "只有创建配对码的手机可以管理设备") }
         guard deviceID != deviceId else { return SyncOutcome(ok: false, message: "本机不受同步范围限制") }
         var aclv = storedACL() ?? SyncSnapshot.ACL(owner: deviceId, writers: [deviceId], req: [])
@@ -391,6 +392,7 @@ final class SyncManager: ObservableObject {
                                          k: kick ? 1 : 0,
                                          c: contraction ? 1 : 0,
                                          s: settings ? 1 : 0,
+                                         w: weight ? 1 : 0,
                                          t: t)
         aclv.sm.removeAll { $0.id == deviceID }
         aclv.sm.append(mask)
@@ -414,6 +416,7 @@ final class SyncManager: ObservableObject {
         for event in (try? ctx.fetch(FetchDescriptor<ContractionEvent>())) ?? [] { ctx.delete(event) }
         for session in (try? ctx.fetch(FetchDescriptor<KickSession>())) ?? [] { ctx.delete(session) }
         for session in (try? ctx.fetch(FetchDescriptor<ContractionSession>())) ?? [] { ctx.delete(session) }
+        for entry in (try? ctx.fetch(FetchDescriptor<WeightEntry>())) ?? [] { ctx.delete(entry) }
         try? ctx.save()
         // 本机的清空戳 / 墓碑也一并清掉：这台设备从此是干净状态
         Self.defaults.removeObject(forKey: Self.keyClearedAt)

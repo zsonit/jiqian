@@ -701,8 +701,9 @@ object SyncManager {
         return pushAclChange("已下发清除：对方联网后本机记录将被清空并解除配对")
     }
 
-    /** 更新某台设备的数据同步掩码（胎动 / 宫缩 / 共享设置三选，LWW 合并） */
-    fun setShareMask(id: String, kick: Boolean, contraction: Boolean, settings: Boolean): SyncResult {
+    /** 更新某台设备的数据同步掩码（胎动 / 宫缩 / 设置 / 体重，LWW 合并） */
+    fun setShareMask(id: String, kick: Boolean, contraction: Boolean,
+                     settings: Boolean, weight: Boolean): SyncResult {
         if (!isOwner()) return SyncResult(false, "只有创建配对码的手机可以管理设备")
         if (id == deviceId()) return SyncResult(false, "本机不受同步范围限制")
         val acl = storedAcl() ?: JSONObject()
@@ -721,6 +722,7 @@ object SyncManager {
             .put("k", if (kick) 1 else 0)
             .put("c", if (contraction) 1 else 0)
             .put("s", if (settings) 1 else 0)
+            .put("w", if (weight) 1 else 0)
             .put("t", t))
         acl.put("sm", sm)
         saveAcl(acl)
@@ -735,6 +737,7 @@ object SyncManager {
         val ctx = appContext ?: return
         Store.replaceAll(ctx, emptyList(), emptyList())
         Store.setRunningContractionStart(ctx, 0L)
+        Store.replaceWeights(ctx, emptyList())
         saveExtra(JSONObject())
         prefs()?.edit()?.putLong(KEY_CL, 0L)?.putString(KEY_DEL, "[]")?.apply()
         // 桌面组件就地刷新，别留着已清空的旧数字
@@ -859,6 +862,18 @@ object SyncManager {
         }
         snap.put("ke", ke)
         snap.put("ce", ce)
+        // 体重（v5.4）：id + 称重时间 + 公斤
+        val we = JSONArray()
+        if (ctx != null) {
+            Store.weights(ctx).sortedBy { it.at }.forEach { w ->
+                we.put(JSONObject()
+                    .put("id", w.id)
+                    .put("at", w.at)
+                    .put("kg", w.kg)
+                    .put("src", "app"))
+            }
+        }
+        snap.put("we", we)
         val ex = extra()
         snap.put("ks", ex.optJSONArray("ks") ?: JSONArray())
         snap.put("cs", ex.optJSONArray("cs") ?: JSONArray())
@@ -883,6 +898,7 @@ object SyncManager {
             (snap.optJSONArray("ce")?.length() ?: 0) == 0 &&
             (snap.optJSONArray("ks")?.length() ?: 0) == 0 &&
             (snap.optJSONArray("cs")?.length() ?: 0) == 0 &&
+            (snap.optJSONArray("we")?.length() ?: 0) == 0 &&
             snap.optLong("cl", 0L) == 0L &&
             (snap.optJSONArray("del")?.length() ?: 0) == 0
 
@@ -973,6 +989,34 @@ object SyncManager {
         out.put("ks", if (rks != null && rks.length() > 0) rks else (local.optJSONArray("ks") ?: JSONArray()))
         val rcs = remote.optJSONArray("cs")
         out.put("cs", if (rcs != null && rcs.length() > 0) rcs else (local.optJSONArray("cs") ?: JSONArray()))
+
+        // 体重（v5.4）：按 id 并集，锚点早于 cl 的丢弃、被墓碑标记的丢弃。
+        // 同一条冲突时以 at 较早的整条取胜（记录不可改，只为两端收敛），与 iOS mergeWE 一致。
+        // 两端都是旧版（没有 we 字段）时不写这个字段，避免把对方的体重当成「空」。
+        if (local.has("we") || remote.has("we")) {
+            val weMap = linkedMapOf<String, JSONObject>()
+            local.optJSONArray("we")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    weMap[o.optString("id")] = o
+                }
+            }
+            remote.optJSONArray("we")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id")
+                    val cur = weMap[id]
+                    if (cur == null) weMap[id] = o
+                    else if (o.optLong("at", 0L) < cur.optLong("at", 0L)) weMap[id] = o
+                }
+            }
+            val weOut = JSONArray()
+            weMap.values
+                .filter { it.optLong("at", 0L) >= cl && "we@${it.optLong("at", 0L)}" !in delIds }
+                .sortedBy { it.optLong("at", 0L) }
+                .forEach { weOut.put(it) }
+            out.put("we", weOut)
+        }
 
         // 共享设置（预产期）：取最后一次修改（t 大者胜，t 相同比 edd），
         // 规则与 iOS SnapshotIO.mergeST 一致
@@ -1108,12 +1152,15 @@ object SyncManager {
         var ceArr = snap0.optJSONArray("ce")
         var ksArr = snap0.optJSONArray("ks")
         var csArr = snap0.optJSONArray("cs")
+        var weArr = snap0.optJSONArray("we")
+        var hasWe = snap0.has("we")
         var stObj = snap0.optJSONObject("st")
         val aclForMask = snap0.optJSONObject("acl")
         if (aclForMask != null && aclForMask.optString("owner") != deviceId()) {
             maskIn(aclForMask, deviceId())?.let { mask ->
                 if (mask.optInt("k", 1) == 0) { keArr = JSONArray(); ksArr = JSONArray() }
                 if (mask.optInt("c", 1) == 0) { ceArr = JSONArray(); csArr = JSONArray() }
+                if (mask.optInt("w", 1) == 0) { weArr = JSONArray(); hasWe = true }
                 if (mask.optInt("s", 1) == 0) stObj = null
             }
         }
@@ -1132,6 +1179,21 @@ object SyncManager {
             }
         }
         Store.replaceAll(ctx, kicks.sorted(), ctns.sortedBy { it.first })
+        // 体重：整体替换（id 保留，跨端删除靠墓碑）。
+        // 旧版快照里没有 we 字段时跳过，绝不把本机体重清空。
+        if (hasWe) {
+            val wList = mutableListOf<WeightItem>()
+            weArr?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val at = o.optLong("at", 0L)
+                    if (at <= 0L) continue
+                    val id = o.optString("id").ifEmpty { "w$at" }
+                    wList.add(WeightItem(id, at, o.optDouble("kg", 0.0)))
+                }
+            }
+            Store.replaceWeights(ctx, wList)
+        }
         val ex = JSONObject()
         ksArr?.let { if (it.length() > 0) ex.put("ks", it) }
         csArr?.let { if (it.length() > 0) ex.put("cs", it) }

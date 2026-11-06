@@ -16,6 +16,9 @@ enum Pal {
     static let brandSoft = Color.dyn(0xFBECF2, 0x3A1F2C)
     static let gold = Color.dyn(0xC08089, 0xE8AEB4)
     static let goldSoft = Color.dyn(0xFBEFF1, 0x2E2226)
+    /// 体重页专用：低饱和青绿，与粉色主色区分开
+    static let teal = Color.dyn(0x3F8A83, 0x86CBC2)
+    static let tealSoft = Color.dyn(0xEAF5F3, 0x1D2E2C)
     static let danger = Color.dyn(0xB2362D, 0xE0796F)
     static let dangerSoft = Color.dyn(0xFBECEB, 0x331E1C)
 }

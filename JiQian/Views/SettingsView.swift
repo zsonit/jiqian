@@ -16,6 +16,7 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var context
     @Query private var kickEvents: [KickEvent]
     @Query private var contractions: [ContractionEvent]
+    @Query private var weightEntries: [WeightEntry]
     @ObservedObject private var sync = SyncManager.shared
 
     @State private var showWipeConfirm = false
@@ -252,13 +253,13 @@ struct SettingsView: View {
                 Button("继续", role: .destructive) { showWipeConfirm2 = true }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("本机的胎动与宫缩记录都会被删除，无法恢复。")
+                Text("本机的胎动、宫缩与体重记录都会被删除，无法恢复。")
             }
             .confirmationDialog("最后确认一次", isPresented: $showWipeConfirm2, titleVisibility: .visible) {
                 Button("彻底清空，无法恢复", role: .destructive) { wipe() }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("将删除胎动 \(kickEvents.count) 条、宫缩 \(contractions.filter { $0.endedAt != nil }.count) 次，包括轮次和间隔信息，删除后无法找回。")
+                Text("将删除胎动 \(kickEvents.count) 条、宫缩 \(contractions.filter { $0.endedAt != nil }.count) 次、体重 \(weightEntries.count) 条，包括轮次和间隔信息，删除后无法找回。")
             }
         }
     }
@@ -314,6 +315,7 @@ struct SettingsView: View {
         guard sync.canEdit else { return }
         for event in kickEvents { context.delete(event) }
         for event in contractions { context.delete(event) }
+        for entry in weightEntries { context.delete(entry) }
         if let sessions = try? context.fetch(FetchDescriptor<KickSession>()) {
             for session in sessions { context.delete(session) }
         }

@@ -154,7 +154,7 @@ fun SyncScreen(onClose: () -> Unit) {
                 DeviceManageCard(
                     devices = devices,
                     masks = masks,
-                    onSetMask = { id, k, c, s -> run { SyncManager.setShareMask(id, k, c, s) } },
+                    onSetMask = { id, k, c, s, w -> run { SyncManager.setShareMask(id, k, c, s, w) } },
                     onUnbind = { id -> run { SyncManager.forceUnbind(id) } },
                     onWipe = { id -> run { SyncManager.wipeDevice(id) } },
                 )
@@ -202,7 +202,7 @@ fun SyncScreen(onClose: () -> Unit) {
                     "* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n" +
                     "* 对方申请编辑权限时，这台手机会弹通知，页面顶部也会出现「点此审批」横幅\n" +
                     "* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n" +
-                    "* 同步内容：胎动与宫缩的全部记录（含轮次、间隔、备注）\n" +
+                    "* 同步内容：胎动、宫缩、体重记录（含轮次、间隔、备注）与共享设置\n" +
                     "* 各自新增的记录都会保留；同一处改动，后改的生效\n" +
                     "* 「撤销上一次」「清空记录」也会同步到对端\n" +
                     "* 解除配对只会停止同步：本机与云端的记录都保留\n" +
@@ -312,7 +312,7 @@ fun PermissionCard(
 fun DeviceManageCard(
     devices: List<String>,
     masks: Map<String, JSONObject?>,
-    onSetMask: (String, Boolean, Boolean, Boolean) -> Unit,
+    onSetMask: (String, Boolean, Boolean, Boolean, Boolean) -> Unit,
     onUnbind: (String) -> Unit,
     onWipe: (String) -> Unit,
 ) {
@@ -331,6 +331,7 @@ fun DeviceManageCard(
                 val kickOn = mask?.optInt("k", 1) != 0
                 val ctnOn = mask?.optInt("c", 1) != 0
                 val setOn = mask?.optInt("s", 1) != 0
+                val weightOn = mask?.optInt("w", 1) != 0
                 Spacer(Modifier.height(12.dp))
                 Box(
                     Modifier
@@ -342,15 +343,16 @@ fun DeviceManageCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("设备 $dev", fontSize = 13.sp, color = Ink, modifier = Modifier.weight(1f))
                     Text(
-                        if (mask == null || (kickOn && ctnOn && setOn)) "全部同步" else "部分同步",
+                        if (mask == null || (kickOn && ctnOn && setOn && weightOn)) "全部同步" else "部分同步",
                         fontSize = 11.sp, color = Ink2
                     )
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MaskChip("胎动", kickOn) { onSetMask(dev, !kickOn, ctnOn, setOn) }
-                    MaskChip("宫缩", ctnOn) { onSetMask(dev, kickOn, !ctnOn, setOn) }
-                    MaskChip("设置", setOn) { onSetMask(dev, kickOn, ctnOn, !setOn) }
+                    MaskChip("胎动", kickOn) { onSetMask(dev, !kickOn, ctnOn, setOn, weightOn) }
+                    MaskChip("宫缩", ctnOn) { onSetMask(dev, kickOn, !ctnOn, setOn, weightOn) }
+                    MaskChip("设置", setOn) { onSetMask(dev, kickOn, ctnOn, !setOn, weightOn) }
+                    MaskChip("体重", weightOn) { onSetMask(dev, kickOn, ctnOn, setOn, !weightOn) }
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -402,7 +404,7 @@ fun DeviceManageCard(
             title = { Text("清除设备 $dev 的数据？", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "对方手机联网后会清空全部胎动与宫缩记录并自动解除配对；本机与云端的记录不受影响。",
+                    "对方手机联网后会清空全部胎动、宫缩与体重记录并自动解除配对；本机与云端的记录不受影响。",
                     fontSize = 13.sp, lineHeight = 19.sp
                 )
             },

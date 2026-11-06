@@ -7,7 +7,8 @@ import SwiftData
 // 其胎动/宫缩记录的锚点就是时间戳，两端以锚点互认）。
 // 字段名刻意用短名，减小密文体积：
 //   ks 胎动轮次 / ke 胎动事件 / cs 宫缩周期 / ce 宫缩事件
-//   cl 清空时间戳（clear-all 墓碑）/ del 单条删除墓碑 [["ke@ms"|"ce@ms", 删除时间ms]]
+//   we 体重记录 / cl 清空时间戳（clear-all 墓碑）/ del 单条删除墓碑
+//   [["ke@ms"|"ce@ms"|"we@ms", 删除时间ms]]
 //
 // 合并规则（与安卓 SyncManager.kt 一致）：
 // * cl 取两端较大值；锚点早于 cl 的记录在所有设备上丢弃（「清空全部」可跨端生效）；
@@ -50,8 +51,17 @@ struct SyncSnapshot: Codable, Equatable {
         var sus: Bool         // isSuspect
     }
     struct Del: Codable, Equatable {
-        var id: String        // "ke@<ms>" / "ce@<startMs>"
+        var id: String        // "ke@<ms>" / "ce@<startMs>" / "we@<ms>"
         var t: Int64          // 删除发生时间（毫秒），用于过期修剪
+    }
+    /// 体重记录（v5.4）：只存事实（时间 + 公斤），不做判断。
+    /// 记录一旦录入就不再修改，冲突时整条取胜（按 at 早的那条），保证两端一致。
+    struct WE: Codable, Equatable {
+        var id: String
+        var at: Int64         // 称重时间
+        var kg: Double
+        var note: String?
+        var src: String
     }
 
     /// 共享设置。预产期决定孕周与摘要里的提示；每轮时长 / 计数窗口 / 高风险因素 /
@@ -121,14 +131,39 @@ struct SyncSnapshot: Codable, Equatable {
             var id: String    // 申请设备的 deviceId
             var t: Int64      // 申请时间（毫秒），用于排序展示 / 撤销比较
         }
-        /// 设备的数据同步掩码：k = 胎动，c = 宫缩，s = 共享设置（预产期等）。
-        /// 1 = 同步，0 = 不同步。t = owner 最后修改时刻（毫秒），合并 LWW 用。
+        /// 设备的数据同步掩码：k = 胎动，c = 宫缩，s = 共享设置（预产期等），
+        /// w = 体重记录（v5.4）。1 = 同步，0 = 不同步。
+        /// t = owner 最后修改时刻（毫秒），合并 LWW 用。
         struct Mask: Codable, Equatable {
             var id: String
             var k: Int
             var c: Int
             var s: Int
+            /// v5.4 新增：旧快照里没有这一位，解码时缺省按 1（同步）
+            var w: Int = 1
             var t: Int64
+
+            enum CodingKeys: String, CodingKey { case id, k, c, s, w, t }
+
+            init(id: String, k: Int, c: Int, s: Int, w: Int = 1, t: Int64) {
+                self.id = id
+                self.k = k
+                self.c = c
+                self.s = s
+                self.w = w
+                self.t = t
+            }
+
+            /// 手写解码：w 是后加字段，老掩码里没有，缺省 1
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+                k = try c.decodeIfPresent(Int.self, forKey: .k) ?? 1
+                self.c = try c.decodeIfPresent(Int.self, forKey: .c) ?? 1
+                s = try c.decodeIfPresent(Int.self, forKey: .s) ?? 1
+                w = try c.decodeIfPresent(Int.self, forKey: .w) ?? 1
+                t = try c.decodeIfPresent(Int64.self, forKey: .t) ?? 0
+            }
         }
         var owner: String
         var writers: [String] = []
@@ -187,6 +222,9 @@ struct SyncSnapshot: Codable, Equatable {
     var ke: [KE] = []
     var cs: [CS] = []
     var ce: [CE] = []
+    /// 体重记录（v5.4）。可选：旧版客户端发的快照没有这个字段，
+    /// 此时绝不能当成「对方没有体重记录」而把本机的清空 —— nil = 老快照，跳过处理。
+    var we: [WE]? = nil
     var cl: Int64 = 0
     var del: [Del] = []
     var acl: ACL?         // nil = 旧版本配对（全员可写，向后兼容）
@@ -194,7 +232,8 @@ struct SyncSnapshot: Codable, Equatable {
 
     /// 本机从头到尾没有任何数据（全新安装）。此时只拉不推，避免空快照盖掉对方。
     var isEmpty: Bool {
-        ks.isEmpty && ke.isEmpty && cs.isEmpty && ce.isEmpty && cl == 0 && del.isEmpty
+        ks.isEmpty && ke.isEmpty && cs.isEmpty && ce.isEmpty
+            && (we?.isEmpty ?? true) && cl == 0 && del.isEmpty
     }
 }
 
@@ -205,6 +244,8 @@ enum SyncTombstone {
 
     static func kick(_ occurredAtMs: Int64) -> String { "ke@\(occurredAtMs)" }
     static func ctn(_ startedAtMs: Int64) -> String { "ce@\(startedAtMs)" }
+    /// 体重：以称重时间为锚点
+    static func weight(_ atMs: Int64) -> String { "we@\(atMs)" }
 }
 
 // MARK: - 权限（acl）合并 —— 两端规则一致，保证收敛
@@ -253,7 +294,7 @@ enum SyncACLResolver {
     }
 
     private static func maskKey(_ m: SyncSnapshot.ACL.Mask) -> String {
-        "\(m.k)|\(m.c)|\(m.s)"
+        "\(m.k)|\(m.c)|\(m.s)|\(m.w)"
     }
 
     static func merge(local: SyncSnapshot.ACL?, remote: SyncSnapshot.ACL?, pendingOwner: String?) -> SyncSnapshot.ACL? {
@@ -342,6 +383,7 @@ enum SnapshotIO {
 
     static func export(from ctx: ModelContext) throws -> SyncSnapshot {
         var snap = SyncSnapshot()
+        var ws: [SyncSnapshot.WE] = []
         snap.st = localSettings()
         for s in try ctx.fetch(FetchDescriptor<KickSession>()) {
             snap.ks.append(SyncSnapshot.KS(id: s.id.uuidString,
@@ -376,6 +418,14 @@ enum SnapshotIO {
                                            gap: e.gap,
                                            sus: e.isSuspect))
         }
+        for w in try ctx.fetch(FetchDescriptor<WeightEntry>()) {
+            ws.append(SyncSnapshot.WE(id: w.id.uuidString,
+                                      at: ms(w.at),
+                                      kg: w.kg,
+                                      note: w.note,
+                                      src: w.sourceRaw))
+        }
+        snap.we = ws
         return snap
     }
 
@@ -418,6 +468,19 @@ enum SnapshotIO {
         out.ce = ce.values
             .filter { $0.s >= out.cl && !delIDs.contains(SyncTombstone.ctn($0.s)) }
             .sorted { $0.s < $1.s }
+
+        // 体重：按 id 并集，同一条以 at 较早的整条取胜（记录不可改，只为两端收敛）；
+        // 锚点早于 cl 的丢弃，被墓碑标记的丢弃。
+        // 两端都没有 we 字段（都是旧版）时保持 nil，不要凭空造出空数组。
+        if local.we != nil || remote.we != nil {
+            var we = Dictionary((local.we ?? []).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            for r in (remote.we ?? []) {
+                if let old = we[r.id] { we[r.id] = mergeWE(old, r) } else { we[r.id] = r }
+            }
+            out.we = we.values
+                .filter { $0.at >= out.cl && !delIDs.contains(SyncTombstone.weight($0.at)) }
+                .sorted { $0.at < $1.at }
+        }
 
         return out
     }
@@ -481,6 +544,14 @@ enum SnapshotIO {
         return out
     }
 
+    /// 体重同一条的融合：记录不可修改，为避免两端各留自己的版本互推，
+    /// 统一「at 较早的那条整条取胜」，备注取非空值（纯函数，两端一致）
+    private static func mergeWE(_ l: SyncSnapshot.WE, _ r: SyncSnapshot.WE) -> SyncSnapshot.WE {
+        var out = l.at <= r.at ? l : r
+        out.note = l.note ?? r.note
+        return out
+    }
+
     // MARK: 应用：快照 → SwiftData（按 id 增量更新，不重建容器）
 
     /// 把快照落进本机数据库。maskedFor = 本机设备 id：
@@ -494,6 +565,7 @@ enum SnapshotIO {
            let mask = acl.mask(deviceID: deviceID) {
             if mask.k == 0 { snap.ks = []; snap.ke = [] }
             if mask.c == 0 { snap.cs = []; snap.ce = [] }
+            if mask.w == 0 { snap.we = [] }
             if mask.s == 0 { snap.st = nil }
         }
         // 胎动轮次
@@ -590,6 +662,28 @@ enum SnapshotIO {
             e.gap = r.gap
             e.isSuspect = r.sus
             ctx.insert(e)
+        }
+
+        // 体重记录（we 为 nil = 旧版快照，未包含这一类数据，跳过、不动本机）
+        if let weList = snap.we {
+            let remoteWE = Dictionary(weList.map { (UUID(uuidString: $0.id) ?? UUID(), $0) },
+                                      uniquingKeysWith: { a, _ in a })
+            for w in try ctx.fetch(FetchDescriptor<WeightEntry>()) {
+                guard let r = remoteWE[w.id] else { ctx.delete(w); continue }
+                w.at = date(r.at)
+                w.kg = r.kg
+                w.note = r.note
+                w.sourceRaw = r.src
+            }
+            for r in weList {
+                let id = UUID(uuidString: r.id) ?? UUID()
+                guard (try ctx.fetch(FetchDescriptor<WeightEntry>(predicate: #Predicate { $0.id == id }))).isEmpty else { continue }
+                let w = WeightEntry(at: date(r.at), kg: r.kg)
+                w.id = id
+                w.note = r.note
+                w.sourceRaw = r.src
+                ctx.insert(w)
+            }
         }
 
         // 共享设置（预产期 / 每轮时长 / 计数窗口 / 高风险因素 / 产科联系方式）：

@@ -42,6 +42,7 @@ enum SummaryBuilder {
         let sessions = (try? context.fetch(FetchDescriptor<KickSession>(sortBy: [SortDescriptor(\.startedAt)]))) ?? []
         let kicks = (try? context.fetch(FetchDescriptor<KickEvent>(sortBy: [SortDescriptor(\.occurredAt)]))) ?? []
         let contractions = (try? context.fetch(FetchDescriptor<ContractionEvent>(sortBy: [SortDescriptor(\.startedAt)]))) ?? []
+        let weights = (try? context.fetch(FetchDescriptor<WeightEntry>(sortBy: [SortDescriptor(\.at)]))) ?? []
 
         var lines: [String] = []
         lines.append("孕期记录 · \(range == .all ? "全部" : "最近 " + range.label)")
@@ -102,6 +103,20 @@ enum SummaryBuilder {
             lines.append("- 明细：\(detail)")
         }
         lines.append("")
+
+        // 体重：只给最近一次与时段内的前后差，不做任何增重评价
+        lines.append("【体重】")
+        let rangedWeights = weights.filter { $0.at >= cutoff }
+        if rangedWeights.isEmpty {
+            lines.append("该时段无记录。")
+        } else if let lastW = rangedWeights.last {
+            lines.append("- 最近一次：\(Fmt.md(lastW.at)) \(Fmt.hhmm(lastW.at)) \(WeightRecorder.text(lastW.kg)) kg。")
+            if rangedWeights.count > 1, let firstW = rangedWeights.first {
+                let delta = lastW.kg - firstW.kg
+                lines.append("- 本时段共 \(rangedWeights.count) 次记录，较第一次 \(WeightRecorder.deltaText(delta)) kg。")
+            }
+        }
+        lines.append("")
         lines.append("（本记录为患者自述，由「胎动」整理，不构成诊断。）")
         return lines.joined(separator: "\n")
     }
@@ -118,6 +133,7 @@ enum SummaryBuilder {
         let sessions = (try? context.fetch(FetchDescriptor<KickSession>(sortBy: [SortDescriptor(\.startedAt)]))) ?? []
         let kicks = (try? context.fetch(FetchDescriptor<KickEvent>(sortBy: [SortDescriptor(\.occurredAt)]))) ?? []
         let contractions = (try? context.fetch(FetchDescriptor<ContractionEvent>(sortBy: [SortDescriptor(\.startedAt)]))) ?? []
+        let weights = (try? context.fetch(FetchDescriptor<WeightEntry>(sortBy: [SortDescriptor(\.at)]))) ?? []
 
         let weekdayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
         let weekday = weekdayNames[cal.component(.weekday, from: day) - 1]
@@ -178,6 +194,20 @@ enum SummaryBuilder {
                 return "\(Fmt.hhmm(event.startedAt))(\(dur)s\(gap))"
             }.joined(separator: "  ")
             lines.append("- 明细：\(detail)")
+        }
+        lines.append("")
+
+        // 体重：只给当天称的数字与前后差，不做任何增重评价
+        lines.append("【体重】")
+        let dayWeights = weights.filter { $0.at >= start && $0.at < end }
+        if dayWeights.isEmpty {
+            lines.append("该日无记录。")
+        } else if let lastW = dayWeights.last {
+            lines.append("- \(Fmt.hhmm(lastW.at)) 称重 \(WeightRecorder.text(lastW.kg)) kg。")
+            if dayWeights.count > 1, let firstW = dayWeights.first {
+                let delta = lastW.kg - firstW.kg
+                lines.append("- 当天共 \(dayWeights.count) 次，与当天第一次相差 \(WeightRecorder.deltaText(delta)) kg。")
+            }
         }
         lines.append("")
         lines.append("（本记录为患者自述，由「胎动」整理，不构成诊断。）")

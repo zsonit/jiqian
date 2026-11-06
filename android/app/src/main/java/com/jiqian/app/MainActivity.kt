@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jiqian.app.ui.WeightScreen
 import com.jiqian.app.widget.Widgets
 import org.json.JSONArray
 import org.json.JSONObject
@@ -47,11 +48,18 @@ val Ink = Color(0xFF3A2530)
 val Ink2 = Color(0xFF9A7E8A)
 val Line = Color(0xFFF2DCE6)
 val Danger = Color(0xFFB2362D)
+// 体重页专用：低饱和青绿，与粉色主色区分
+val Teal = Color(0xFF3F8A83)
+val TealSoft = Color(0xFFEAF5F3)
+
+/** 一条体重记录（只存时间 + 公斤，不做任何判断） */
+data class WeightItem(val id: String, val at: Long, val kg: Double)
 
 // ---------- 数据存储（SharedPreferences + JSON，本地优先不外传） ----------
 object Store {
     private const val KEY_KICKS = "kicks"
     private const val KEY_CONTRACTIONS = "contractions"
+    private const val KEY_WEIGHTS = "weights"
     private const val KEY_PREFS = "prefs"
     private const val KEY_CTN_RUNNING = "ctn_running"
 
@@ -133,8 +141,66 @@ object Store {
         Widgets.refresh(ctx)
     }
 
-    fun roundMin(ctx: Context) = sp(ctx).getInt(KEY_PREFS + "roundMin", 60)
-    fun setRoundMin(ctx: Context, v: Int) = sp(ctx).edit().putInt(KEY_PREFS + "roundMin", v).apply()
+    // ---------- 体重（v5.4）：只存时间与公斤，随配对同步 ----------
+
+    fun weights(ctx: Context): MutableList<WeightItem> {
+        val a = JSONArray(sp(ctx).getString(KEY_WEIGHTS, "[]"))
+        val l = mutableListOf<WeightItem>()
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            val at = o.optLong("at", 0L)
+            if (at <= 0L) continue
+            val id = o.optString("id").ifEmpty { "w$at" }
+            l.add(WeightItem(id, at, o.optDouble("kg", 0.0)))
+        }
+        return l.sortedBy { it.at }.toMutableList()
+    }
+
+    private fun saveWeights(ctx: Context, list: List<WeightItem>) {
+        val a = JSONArray()
+        list.sortedBy { it.at }.forEach { w ->
+            a.put(JSONObject().put("id", w.id).put("at", w.at).put("kg", w.kg))
+        }
+        sp(ctx).edit().putString(KEY_WEIGHTS, a.toString()).apply()
+    }
+
+    /** 记一次体重；返回是否成功（查看模式 / 数值不合理时不落库） */
+    fun addWeight(ctx: Context, kg: Double, at: Long = System.currentTimeMillis()): Boolean {
+        if (!SyncManager.canEdit) return false
+        if (kg < 30.0 || kg > 200.0) return false
+        val l = weights(ctx)
+        // 同一毫秒重复点击：直接覆盖那一条，避免生成两条一模一样
+        val rounded = Math.round(kg * 10.0) / 10.0
+        l.removeAll { it.at == at }
+        l.add(WeightItem("w$at", at, rounded))
+        saveWeights(ctx, l)
+        SyncManager.onDataChanged()
+        return true
+    }
+
+    fun deleteWeight(ctx: Context, item: WeightItem) {
+        if (!SyncManager.canEdit) return
+        val l = weights(ctx)
+        l.removeAll { it.id == item.id }
+        saveWeights(ctx, l)
+        // 以称重时间为锚点写墓碑，对端同一条一并删除
+        SyncManager.addTombstone("we@${item.at}")
+        SyncManager.onDataChanged()
+    }
+
+    fun clearWeights(ctx: Context) {
+        if (!SyncManager.canEdit) return
+        weights(ctx).forEach { SyncManager.addTombstone("we@${it.at}") }
+        saveWeights(ctx, emptyList())
+        SyncManager.onDataChanged()
+    }
+
+    /** 同步引擎专用：整体替换（不触发 onDataChanged） */
+    fun replaceWeights(ctx: Context, list: List<WeightItem>) {
+        saveWeights(ctx, list)
+    }
+
+    fun roundMin(ctx: Context) = sp(ctx).getInt(KEY_PREFS + "roundMin", 60)    fun setRoundMin(ctx: Context, v: Int) = sp(ctx).edit().putInt(KEY_PREFS + "roundMin", v).apply()
 
     /** 预产期（当天 0 点毫秒，0 = 未设置）与最后修改时间的镜像；同步数据源在 SyncManager 的 st */
     fun edd(ctx: Context) = sp(ctx).getLong(KEY_PREFS + "edd", 0L)
@@ -309,7 +375,8 @@ fun App() {
                         showSync -> SyncScreen(onClose = { showSync = false })
                         tab == 0 -> KickScreen()
                         tab == 1 -> ContractionScreen()
-                        tab == 2 -> SummaryScreen()
+                        tab == 2 -> WeightScreen()
+                        tab == 3 -> SummaryScreen()
                         else -> SettingsScreen(onOpenSync = { showSync = true })
                     }
                 }
@@ -321,7 +388,7 @@ fun App() {
 
 @Composable
 fun BottomBar(sel: Int, onPick: (Int) -> Unit) {
-    val items = listOf("胎动", "宫缩", "摘要", "设置")
+    val items = listOf("胎动", "宫缩", "体重", "摘要", "设置")
     Surface(color = CardBg.copy(alpha = 0.9f), shadowElevation = 8.dp) {
         Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 6.dp)) {
             items.forEachIndexed { i, name ->
@@ -516,9 +583,11 @@ fun SummaryScreen() {
 
     val kicks = Store.kicks(ctx)
     val ctns = Store.contractions(ctx)
+    val weights = Store.weights(ctx)
     val targetDay = dayStart(System.currentTimeMillis()) - dayOffset * 86_400_000L
     val dayKicks = if (showAll) kicks else kicks.filter { dayStart(it) == targetDay }
     val dayCtns = if (showAll) ctns else ctns.filter { dayStart(it.first) == targetDay }
+    val dayWeights = if (showAll) weights else weights.filter { dayStart(it.at) == targetDay }
 
     val sb = StringBuilder()
     sb.append("胎动记录 · ")
@@ -534,6 +603,20 @@ fun SummaryScreen() {
     dayCtns.sortedBy { it.first }.forEach { (s, e) ->
         val dur = (e - s) / 1000
         sb.append("\n").append(fmtFull(s)).append("（%02d分%02d秒）".format(dur / 60, dur % 60))
+    }
+    // 体重：只给最近一次与时段内的前后差，不做任何增重评价
+    sb.append("\n\n体重：")
+    if (dayWeights.isEmpty()) {
+        sb.append("无记录")
+    } else {
+        val last = dayWeights.last()
+        sb.append("最近 ").append(fmtDay(last.at)).append(" ").append("%.1f".format(last.kg)).append(" kg")
+        if (dayWeights.size > 1) {
+            val delta = last.kg - dayWeights.first().kg
+            sb.append("\n共 ${dayWeights.size} 次记录，较第一次 ")
+                .append(if (kotlin.math.abs(delta) < 0.05) "±0.0" else (if (delta > 0) "+" else "-") + "%.1f".format(kotlin.math.abs(delta)))
+                .append(" kg")
+        }
     }
     val text = sb.toString()
 
@@ -757,6 +840,11 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
                         enabled = SyncManager.canEdit,
                         shape = RoundedCornerShape(50)
                     ) { Text("清空宫缩", color = if (SyncManager.canEdit) Danger else Ink2) }
+                    OutlinedButton(
+                        onClick = { wipeKind = "weights"; confirmStep = 1 },
+                        enabled = SyncManager.canEdit,
+                        shape = RoundedCornerShape(50)
+                    ) { Text("清空体重", color = if (SyncManager.canEdit) Danger else Ink2) }
                 }
                 if (!SyncManager.canEdit) {
                     Spacer(Modifier.height(6.dp))
@@ -770,10 +858,14 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v5.2 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v5.4 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
-            val name = if (wipeKind == "kicks") "胎动" else "宫缩"
+            val name = when (wipeKind) {
+                "kicks" -> "胎动"
+                "ctns" -> "宫缩"
+                else -> "体重"
+            }
             AlertDialog(
                 onDismissRequest = { confirmStep = 0 },
                 title = { Text(if (confirmStep == 1) "清空${name}记录？" else "最后确认一次") },
@@ -793,9 +885,12 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
                             if (wipeKind == "kicks") {
                                 Store.clearKicks(ctx)
                                 Toast.makeText(ctx, "胎动记录已清空", Toast.LENGTH_SHORT).show()
-                            } else {
+                            } else if (wipeKind == "ctns") {
                                 Store.clearContractions(ctx)
                                 Toast.makeText(ctx, "宫缩记录已清空", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Store.clearWeights(ctx)
+                                Toast.makeText(ctx, "体重记录已清空", Toast.LENGTH_SHORT).show()
                             }
                             confirmStep = 0
                         }

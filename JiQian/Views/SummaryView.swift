@@ -22,6 +22,7 @@ struct SummaryView: View {
     @Query(sort: \KickEvent.occurredAt, order: .reverse) private var kickEvents: [KickEvent]
     @Query(sort: \KickSession.startedAt, order: .reverse) private var kickSessions: [KickSession]
     @Query(sort: \ContractionEvent.startedAt, order: .reverse) private var contractionEvents: [ContractionEvent]
+    @Query(sort: \WeightEntry.at, order: .reverse) private var weightEntries: [WeightEntry]
 
     @AppStorage(PrefKey.edd) private var eddStamp: Double = 0
     @AppStorage(PrefKey.risks) private var risksRaw: String = ""
@@ -45,6 +46,11 @@ struct SummaryView: View {
             hasher.combine(event.startedAt)
             hasher.combine(event.endedAt)
             hasher.combine(event.gap)
+        }
+        for entry in weightEntries {
+            hasher.combine(entry.id)
+            hasher.combine(entry.at)
+            hasher.combine(entry.kg)
         }
         return hasher.finalize()
     }

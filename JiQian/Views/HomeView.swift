@@ -4,12 +4,14 @@ import SwiftData
 enum HomeRoute: Hashable {
     case kick
     case contraction
+    case weight
 }
 
 struct HomeView: View {
     @Query(sort: \KickSession.startedAt, order: .reverse) private var sessions: [KickSession]
     @Query(sort: \KickEvent.occurredAt, order: .reverse) private var events: [KickEvent]
     @Query(sort: \ContractionEvent.startedAt, order: .reverse) private var contractions: [ContractionEvent]
+    @Query(sort: \WeightEntry.at, order: .forward) private var weights: [WeightEntry]
 
     @AppStorage(PrefKey.edd) private var eddTimestamp: Double = 0
     @AppStorage(PrefKey.provider) private var provider: String = ""
@@ -68,6 +70,7 @@ struct HomeView: View {
                 switch route {
                 case .kick: KickView()
                 case .contraction: ContractionView()
+                case .weight: WeightView()
                 }
             }
         }
@@ -142,7 +145,34 @@ struct HomeView: View {
                 )
             }
             .buttonStyle(.plain)
+
+            NavigationLink(value: HomeRoute.weight) {
+                BigCard(
+                    caption: "体重",
+                    value: weightLatest.map { WeightRecorder.text($0.kg) } ?? "—",
+                    unit: weightLatest == nil ? "还没有记录" : "kg · 最近一次",
+                    subtitle: weightSubtitle,
+                    live: false,
+                    tint: Pal.teal
+                )
+            }
+            .buttonStyle(.plain)
         }
+    }
+
+    private var weightLatest: WeightEntry? { weights.last }
+
+    private var weightSubtitle: String {
+        let stats = WeightRecorder.stats(weights)
+        if weights.isEmpty { return "点进来记一次体重，只用填公斤数" }
+        var parts = ["共 \(stats.count) 次"]
+        if let gained = stats.gained {
+            parts.insert("较首次 \(WeightRecorder.deltaText(gained)) kg", at: 0)
+        }
+        if let latest = stats.latest {
+            parts.append("最近 \(Fmt.md(latest.at))")
+        }
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder

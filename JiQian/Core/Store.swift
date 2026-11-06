@@ -10,7 +10,8 @@ enum JiQianStore {
             KickSession.self,
             KickEvent.self,
             ContractionSession.self,
-            ContractionEvent.self
+            ContractionEvent.self,
+            WeightEntry.self
         ])
         let onDisk = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         if let container = try? ModelContainer(for: schema, configurations: [onDisk]) {
