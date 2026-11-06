@@ -22,8 +22,11 @@ enum WeightRecorder {
     static let minKg = 30.0
     static let maxKg = 200.0
 
-    static func all(in ctx: ModelContext = JiQianStore.context) -> [WeightEntry] {
-        (try? ctx.fetch(FetchDescriptor<WeightEntry>(sortBy: [SortDescriptor(\.at)]))) ?? []
+    /// 默认参数不能直接引用 @MainActor 的 JiQianStore.context（默认值在非隔离上下文求值），
+    /// 所以这里传 nil 进函数内部再取。
+    static func all(in ctx: ModelContext? = nil) -> [WeightEntry] {
+        let context = ctx ?? JiQianStore.context
+        return (try? context.fetch(FetchDescriptor<WeightEntry>(sortBy: [SortDescriptor(\.at)]))) ?? []
     }
 
     static func stats(_ entries: [WeightEntry]) -> WeightStats {
