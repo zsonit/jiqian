@@ -26,7 +26,7 @@ targets:
       properties:
         CFBundleDisplayName: 胎动记录
         CFBundleName: JiQian
-        CFBundleShortVersionString: "5.7"
+        CFBundleShortVersionString: "5.8"
         CFBundleVersion: "56"
         CFBundleURLTypes:
           - CFBundleURLName: com.jiqian.app
@@ -55,7 +55,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jiqian.app
         PRODUCT_NAME: JiQian
-        MARKETING_VERSION: "5.7"
+        MARKETING_VERSION: "5.8"
         CURRENT_PROJECT_VERSION: "56"
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -78,7 +78,7 @@ targets:
       path: Widget/Info.plist
       properties:
         CFBundleDisplayName: 胎动组件
-        CFBundleShortVersionString: "5.7"
+        CFBundleShortVersionString: "5.8"
         CFBundleVersion: "56"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
@@ -86,7 +86,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jiqian.app.widgets
         PRODUCT_NAME: JiQianWidgets
-        MARKETING_VERSION: "5.7"
+        MARKETING_VERSION: "5.8"
         CURRENT_PROJECT_VERSION: "56"
         TARGETED_DEVICE_FAMILY: "1,2"
         SKIP_INSTALL: YES

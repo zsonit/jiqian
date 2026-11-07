@@ -684,6 +684,8 @@ final class SyncManager: ObservableObject {
             return SyncOutcome(ok: false, message: msg)
         }
         var merged = local
+        // 这一轮真的从对方落到新数据了（只读端也能拉到，所以单独立标记）
+        var appliedFromRemote = false
         // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
         var mustPush = localDirty || lastRev == 0 || remoteSnapshot?.updatedBy == Self.empty
         if let snapshot = remoteSnapshot {
@@ -704,6 +706,8 @@ final class SyncManager: ObservableObject {
             if merged != local {
                 do {
                     try SnapshotIO.apply(merged, to: ctx, maskedFor: deviceId)
+                    appliedFromRemote = true
+                    AppLog.i("Sync", "已应用对方数据：\(diffSummary(from: local, to: merged))")
                 } catch {
                     AppLog.e("Sync", "应用合并结果失败：\(error)")
                     return SyncOutcome(ok: false, message: "应用合并结果失败")
@@ -723,9 +727,10 @@ final class SyncManager: ObservableObject {
         if !mustPush {
             // 同步途中本机权限表被改过（点了申请/审批）：以本机为准，别被合并结果盖掉
             refreshAccess(storedACL() == aclAtStart ? merged.acl : storedACL())
-            DispatchQueue.main.async { self.lastMessage = "已是最新" }
-            AppLog.i("Sync", "同步完成：已是最新（rev=\(lastRev)，\(computeCanEdit() ? "可写" : "只读")）")
-            return SyncOutcome(ok: true, message: "已是最新")
+            let endMsg = appliedFromRemote ? "已收到对方新数据" : "已是最新"
+            DispatchQueue.main.async { self.lastMessage = endMsg }
+            AppLog.i("Sync", "同步完成：\(endMsg)（rev=\(lastRev)，\(computeCanEdit() ? "可写" : "只读")）")
+            return SyncOutcome(ok: true, message: endMsg)
         }
 
         var pushSnapshot = merged

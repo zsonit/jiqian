@@ -1323,6 +1323,8 @@ object SyncManager {
             // 命中就就地处理并返回，绝不推送（防止把本机数据盖回云端）
             if (remote != null) handleAdminAction(remote.state)?.let { return it }
             var merged = local
+            // 这一轮真的从对方落到新数据了（只读端也能拉到，所以单独立标记）
+            var appliedFromRemote = false
             // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
             var mustPush = localDirty || lastRev == 0L || remote?.updatedBy == EMPTY
             if (remote != null) {
@@ -1336,6 +1338,8 @@ object SyncManager {
                 }
                 if (merged.toString() != local.toString()) {
                     applySnapshot(merged)
+                    appliedFromRemote = true
+                    AppLog.i("已应用对方数据：${diffSummary(local, merged)}")
                     mustPush = true
                 }
             }
@@ -1353,9 +1357,9 @@ object SyncManager {
                     if (prefs()?.getString(KEY_ACL, null) == aclAtStart) merged.optJSONObject("acl")
                     else storedAcl()
                 )
-                lastMessage = "已是最新"
-                AppLog.i("同步完成：已是最新（rev=$lastRev，${if (computeCanEdit()) "可写" else "只读"}）")
-                return SyncResult(true, "已是最新")
+                lastMessage = if (appliedFromRemote) "已收到对方新数据" else "已是最新"
+                AppLog.i("同步完成：$lastMessage（rev=$lastRev，${if (computeCanEdit()) "可写" else "只读"}）")
+                return SyncResult(true, lastMessage!!)
             }
             var pushSnapshot = merged
             if (!localCanEdit && remote != null && remote.updatedBy != EMPTY) {
