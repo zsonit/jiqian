@@ -64,6 +64,8 @@ final class SyncManager: ObservableObject {
     private let syncLock = NSLock()
     private var isSyncing = false
     private var lastRev: Int64 = 0
+    /// 上次记「失败类」日志的时刻（节流：同类错误最多每分钟一条）
+    private var lastFailLogAt: TimeInterval = 0
 
     private init() {
         let d = Self.defaults.string(forKey: Self.keyDevice) ?? {
@@ -179,11 +181,16 @@ final class SyncManager: ObservableObject {
             return
         }
         let url = "\(Self.rest)?code=eq.\(code)&select=rev,updated_by&limit=1"
-        guard let (resp, status) = Self.request(method: "GET", url: url, body: nil), status == 200,
+        let pollResult = Self.request(method: "GET", url: url, body: nil)
+        guard let (resp, status) = pollResult, status == 200,
               let data = resp,
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
               let row = arr.first
-        else { return }
+        else {
+            logThrottled(pollResult == nil ? "轮询失败：网络不可用"
+                         : "轮询失败：HTTP \((pollResult?.1 ?? 0))")
+            return
+        }
         let remoteRev = (row["rev"] as? NSNumber)?.int64Value ?? 0
         guard remoteRev != lastRev else { return }
         if (row["updated_by"] as? String) == deviceId {
@@ -197,6 +204,32 @@ final class SyncManager: ObservableObject {
     private func setRev(_ rev: Int64) {
         lastRev = rev
         Self.defaults.set(rev, forKey: Self.keyRev)
+    }
+
+    /// 失败日志节流：断网等重复错误最多每分钟记一条，避免刷屏
+    private func logThrottled(_ msg: String) {
+        let now = Date().timeIntervalSince1970
+        guard now - lastFailLogAt >= 60 else { return }
+        lastFailLogAt = now
+        AppLog.w("Sync", msg)
+    }
+
+    /// 这轮合并从对方新收到多少条（按类别，用于日志）
+    private func diffSummary(from old: SyncSnapshot, to new: SyncSnapshot) -> String {
+        func added(_ o: [String], _ n: [String]) -> Int {
+            let s = Set(o)
+            return n.filter { !s.contains($0) }.count
+        }
+        var parts: [String] = []
+        let k = added(old.ke.map { $0.id }, new.ke.map { $0.id })
+            + added(old.ks.map { $0.id }, new.ks.map { $0.id })
+        if k > 0 { parts.append("胎动\(k)条") }
+        let c = added(old.ce.map { $0.id }, new.ce.map { $0.id })
+            + added(old.cs.map { $0.id }, new.cs.map { $0.id })
+        if c > 0 { parts.append("宫缩\(c)条") }
+        let w = added((old.we ?? []).map { $0.id }, (new.we ?? []).map { $0.id })
+        if w > 0 { parts.append("体重\(w)条") }
+        return parts.isEmpty ? "无新记录" : "新收到 " + parts.joined(separator: "、")
     }
 
     var pairedCode: String? { Self.defaults.string(forKey: Self.keyCode) }
@@ -591,6 +624,7 @@ final class SyncManager: ObservableObject {
         ctx.autosaveEnabled = false
 
         guard var local = try? SnapshotIO.export(from: ctx) else {
+            AppLog.e("Sync", "本机数据读取失败")
             return SyncOutcome(ok: false, message: "本机数据读取失败")
         }
         withLocalMarks(&local)
@@ -606,18 +640,20 @@ final class SyncManager: ObservableObject {
         // 本机没数据、也没有权限表要登记：只拉不推，避免把空数据盖掉对方
         if local.isEmpty && local.acl == nil {
             guard let snapshot = fetchRemote(code: code) else {
+                AppLog.w("Sync", "拉取云端失败：网络不可用")
                 return SyncOutcome(ok: false, message: manual ? "网络不可用" : "")
             }
             if snapshot.updatedBy == Self.undecryptable {
                 let msg = "云端数据无法解密，请重新输入配对码"
                 DispatchQueue.main.async { self.lastMessage = msg }
-                AppLog.w("Sync", msg)
+                logThrottled(msg)
                 return SyncOutcome(ok: false, message: msg)
             }
             if snapshot.updatedBy == Self.empty {
                 // 对方也还没推过：推一次本机（空）快照占行，让对端能发现我们
                 _ = upsert(code: code, snapshot: local)
                 markSynced()
+                AppLog.i("Sync", "云端还没有数据，已推送本机占位")
                 return SyncOutcome(ok: true, message: manual ? "已就绪，等待对方数据" : "")
             }
             // owner 下发的管理动作（清除 / 解绑）优先于一切数据同步
@@ -632,6 +668,7 @@ final class SyncManager: ObservableObject {
             }
             refreshAccess(snapshot.state.acl)
             markSynced()
+            AppLog.i("Sync", "已拉取对方数据：\(diffSummary(from: local, to: snapshot.state))")
             DispatchQueue.main.async { self.lastMessage = "已拉取对方记录" }
             return SyncOutcome(ok: true, message: "已拉取对方记录")
         }
@@ -643,7 +680,7 @@ final class SyncManager: ObservableObject {
             // 解密不了多半是两端密钥/配对码对不上，此时绝不能拿本机数据覆盖云端，否则另一端会被清空
             let msg = "云端数据无法解密，请重新输入配对码"
             DispatchQueue.main.async { self.lastMessage = msg }
-            AppLog.w("Sync", msg)
+            logThrottled(msg)
             return SyncOutcome(ok: false, message: msg)
         }
         var merged = local
@@ -687,6 +724,7 @@ final class SyncManager: ObservableObject {
             // 同步途中本机权限表被改过（点了申请/审批）：以本机为准，别被合并结果盖掉
             refreshAccess(storedACL() == aclAtStart ? merged.acl : storedACL())
             DispatchQueue.main.async { self.lastMessage = "已是最新" }
+            AppLog.i("Sync", "同步完成：已是最新（rev=\(lastRev)，\(computeCanEdit() ? "可写" : "只读")）")
             return SyncOutcome(ok: true, message: "已是最新")
         }
 
@@ -722,6 +760,7 @@ final class SyncManager: ObservableObject {
         }
         markSynced()
         let msg = (remoteSnapshot != nil && merged != local) ? "已同步（收到对方的新记录）" : "已同步"
+        AppLog.i("Sync", "同步完成：\(msg)（\(diffSummary(from: local, to: merged))，rev=\(lastRev)）")
         DispatchQueue.main.async { self.lastMessage = msg }
         return SyncOutcome(ok: true, message: msg)
     }
@@ -759,7 +798,9 @@ final class SyncManager: ObservableObject {
         guard let row = arr.first, let payload = row["payload"] as? [String: Any] else {
             return (SyncSnapshot(), Self.empty)
         }
-        setRev((row["rev"] as? NSNumber)?.int64Value ?? 0)
+        // rev 只在真正拿到数据后才记下：解密失败等异常不能消费 rev，
+        // 否则下一次轮询会误以为「这版已经看过」，对方的数据就再也不拉了
+        let remoteRev = (row["rev"] as? NSNumber)?.int64Value ?? 0
 
         // 端到端加密信封 —— 先采用云端盐，再用它解
         if payload["ct"] is String {
@@ -768,9 +809,10 @@ final class SyncManager: ObservableObject {
                   let jsonData = plain.data(using: .utf8),
                   let state = try? JSONDecoder().decode(SyncSnapshot.self, from: jsonData)
             else {
-                AppLog.w("Sync", "云端密文无法解密（密钥不一致），本轮跳过，不覆盖云端")
+                logThrottled("云端密文无法解密（密钥不一致），本轮跳过，不覆盖云端")
                 return (SyncSnapshot(), Self.undecryptable)
             }
+            setRev(remoteRev)
             return (state, row["updated_by"] as? String ?? "")
         }
 
@@ -782,6 +824,7 @@ final class SyncManager: ObservableObject {
             return nil
         }
         AppLog.i("Sync", "检测到旧版明文数据，本次同步后自动改成密文")
+        setRev(remoteRev)
         return (state, row["updated_by"] as? String ?? "")
     }
 

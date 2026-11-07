@@ -72,6 +72,8 @@ object SyncManager {
     /** 同步进行中又来了新改动：等这一轮结束后必须补跑一次，否则这次改动会被丢掉 */
     @Volatile private var retryPending = false
     private var lastRev: Long = 0L
+    /** 上次记「失败类」日志的时刻（节流：同类错误最多每分钟一条） */
+    private var lastFailLogAt = 0L
 
     private val pollRunnable = object : Runnable {
         override fun run() {
@@ -456,8 +458,13 @@ object SyncManager {
             syncNow(manual = false)
             return
         }
-        val (body, _) = http("GET", "$REST?code=eq.$code&select=rev,updated_by&limit=1", null)
-        if (body == null) return
+        val pollResp = http("GET", "$REST?code=eq.$code&select=rev,updated_by&limit=1", null)
+        val body = pollResp.first
+        if (body == null) {
+            logThrottled(if (pollResp.second == 0) "轮询失败：网络不可用"
+                         else "轮询失败：HTTP ${pollResp.second}")
+            return
+        }
         val row = runCatching { JSONArray(body).optJSONObject(0) }.getOrNull() ?: return
         val remoteRev = row.optLong("rev", 0L)
         val by = row.optString("updated_by")
@@ -474,6 +481,37 @@ object SyncManager {
     private fun setRev(rev: Long) {
         lastRev = rev
         prefs()?.edit()?.putLong(KEY_REV, rev)?.apply()
+    }
+
+    /** 失败日志节流：断网等重复错误最多每分钟记一条，避免刷屏 */
+    private fun logThrottled(msg: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastFailLogAt < 60_000L) return
+        lastFailLogAt = now
+        AppLog.w(msg)
+    }
+
+    /** 这轮合并从对方新收到多少条（按类别，用于日志） */
+    private fun diffSummary(local: JSONObject, merged: JSONObject): String {
+        fun added(o: JSONArray?, n: JSONArray?): Int {
+            val old = HashSet<String>()
+            for (i in 0 until (o?.length() ?: 0)) old.add(o!!.optJSONObject(i)?.optString("id") ?: "")
+            var count = 0
+            for (i in 0 until (n?.length() ?: 0)) {
+                if ((n!!.optJSONObject(i)?.optString("id") ?: "") !in old) count++
+            }
+            return count
+        }
+        val parts = ArrayList<String>()
+        val k = added(local.optJSONArray("ke"), merged.optJSONArray("ke")) +
+                added(local.optJSONArray("ks"), merged.optJSONArray("ks"))
+        if (k > 0) parts.add("胎动${k}条")
+        val c = added(local.optJSONArray("ce"), merged.optJSONArray("ce")) +
+                added(local.optJSONArray("cs"), merged.optJSONArray("cs"))
+        if (c > 0) parts.add("宫缩${c}条")
+        val w = added(local.optJSONArray("we"), merged.optJSONArray("we"))
+        if (w > 0) parts.add("体重${w}条")
+        return if (parts.isEmpty()) "无新记录" else "新收到 " + parts.joinToString("、")
     }
 
     private fun prefs() = appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -1256,6 +1294,7 @@ object SyncManager {
                 val resp = upsert(code, local)
                 if (resp.ok) {
                     markSynced()
+                    AppLog.i("云端还没有数据，已推送本机占位")
                     return SyncResult(true, if (manual) "已就绪，等待对方数据" else "已就绪")
                 }
                 return SyncResult(false, resp.message)
@@ -1265,6 +1304,7 @@ object SyncManager {
             applySnapshot(remote.state)
             refreshAccess(remote.state.optJSONObject("acl"))
             markSynced()
+            AppLog.i("已拉取对方数据：${diffSummary(local, remote.state)}")
             lastMessage = "已拉取对方记录"
             return SyncResult(true, "已拉取对方记录")
         }
@@ -1275,7 +1315,7 @@ object SyncManager {
                 // 解密不了多半是两端密钥/配对码对不上，此时绝不能拿本机数据覆盖云端，否则另一端会被清空
                 val msg = "云端数据无法解密，请重新输入配对码"
                 lastMessage = msg
-                AppLog.w(msg)
+                logThrottled(msg)
                 return SyncResult(false, msg)
             }
             val localCanEdit = computeCanEdit()
@@ -1314,6 +1354,7 @@ object SyncManager {
                     else storedAcl()
                 )
                 lastMessage = "已是最新"
+                AppLog.i("同步完成：已是最新（rev=$lastRev，${if (computeCanEdit()) "可写" else "只读"}）")
                 return SyncResult(true, "已是最新")
             }
             var pushSnapshot = merged
@@ -1341,6 +1382,7 @@ object SyncManager {
             markSynced()
             val mergedNew = remote != null && merged.toString() != local.toString()
             lastMessage = if (mergedNew) "已同步（收到对方的新记录）" else "已同步"
+            AppLog.i("同步完成：$lastMessage（${diffSummary(local, merged)}，rev=$lastRev）")
             return SyncResult(true, lastMessage ?: "已同步")
         } catch (e: Exception) {
             AppLog.e("同步异常：$e")
@@ -1397,7 +1439,9 @@ object SyncManager {
         val arr = JSONArray(body)
         if (arr.length() == 0) return RemoteSnapshot(JSONObject(), EMPTY)
         val row = arr.optJSONObject(0) ?: return null
-        setRev(row.optLong("rev", 0L))
+        // rev 只在真正拿到数据后才记下：解密失败等异常不能消费 rev，
+        // 否则下一次轮询会误以为「这版已经看过」，对方的数据就再也不拉了
+        val remoteRev = row.optLong("rev", 0L)
         val payload = row.optJSONObject("payload") ?: return RemoteSnapshot(JSONObject(), EMPTY)
 
         // 端到端加密信封 —— 先采用云端盐，再用它解
@@ -1406,14 +1450,16 @@ object SyncManager {
             val plain = SyncCrypto.decrypt(code, payload)
             if (plain == null) {
                 // 解不开：配对码/盐对不上。返回标记让调用方跳过本轮，绝不能用本机数据覆盖云端
-                AppLog.w("云端密文无法解密（密钥不一致），本轮跳过，不覆盖云端")
+                logThrottled("云端密文无法解密（密钥不一致），本轮跳过，不覆盖云端")
                 return RemoteSnapshot(JSONObject(), UNDECRYPTABLE)
             }
+            setRev(remoteRev)
             return RemoteSnapshot(JSONObject(plain), row.optString("updated_by"))
         }
 
         // 旧格式兼容：直接就是明文互通 JSON
         AppLog.i("检测到旧版明文数据，本次同步后自动改成密文")
+        setRev(remoteRev)
         return RemoteSnapshot(payload, row.optString("updated_by"))
     }
 
