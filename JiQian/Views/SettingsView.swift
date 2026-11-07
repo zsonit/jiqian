@@ -21,6 +21,8 @@ struct SettingsView: View {
 
     @State private var showWipeConfirm = false
     @State private var showWipeConfirm2 = false
+    /// 运行日志独立开关（排查用）：默认关，不参与配对同步
+    @AppStorage(AppLog.enabledKey) private var diagLogOn: Bool = false
 
     private var eddBinding: Binding<Date> {
         Binding(
@@ -235,6 +237,29 @@ struct SettingsView: View {
                     Text(sync.canEdit
                          ? "不配对时全部数据只存在这台设备上，没有账号，也不会上传。卸载应用即删除。开启配对同步后，记录会在你的配对设备间加密同步。"
                          : "查看模式下没有清空入口；需要清空请在可编辑的那台手机上操作（会同步删除所有配对设备的记录）。")
+                }
+
+                Section {
+                    Toggle("运行日志（排查用）", isOn: $diagLogOn)
+                        .onChange(of: diagLogOn) { _, on in
+                            if !on { AppLog.clear() }   // 关闭即清空，不留残留
+                        }
+                    if diagLogOn {
+                        NavigationLink {
+                            LogView()
+                        } label: {
+                            HStack {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .foregroundStyle(Pal.brand)
+                                Text("查看日志")
+                                Spacer()
+                            }
+                        }
+                    }
+                } header: {
+                    Text("运行日志")
+                } footer: {
+                    Text("打开后 App 会把同步、配对等关键动作记进本机日志（最近 600 条），排查问题时把日志复制发给开发者即可。日志只存在这台手机的内存里，不落盘、不同步、不上传；关闭开关即清空。")
                 }
 
                 Section {

@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jiqian.app.ui.LogScreen
 import com.jiqian.app.ui.WeightScreen
 import com.jiqian.app.widget.Widgets
 import org.json.JSONArray
@@ -289,6 +290,7 @@ fun gestationText(eddMs: Long, now: Long = System.currentTimeMillis()): String {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.init(applicationContext)
         SyncManager.bootstrap(applicationContext)
         SyncNotifier.ensureChannel(applicationContext)
         // 已配对才申请通知权限（有人申请编辑权限时要能提醒到）
@@ -334,6 +336,7 @@ class MainActivity : ComponentActivity() {
 fun App() {
     var tab by remember { mutableStateOf(0) }
     var showSync by remember { mutableStateOf(false) }
+    var showLog by remember { mutableStateOf(false) }
     val openSyncTick = SyncManager.openSyncTick
     // 点通知进来：直接打开配对同步页
     LaunchedEffect(openSyncTick) {
@@ -373,11 +376,12 @@ fun App() {
                 Box(Modifier.weight(1f)) {
                     when {
                         showSync -> SyncScreen(onClose = { showSync = false })
+                        showLog -> LogScreen(onClose = { showLog = false })
                         tab == 0 -> KickScreen()
                         tab == 1 -> ContractionScreen()
                         tab == 2 -> WeightScreen()
                         tab == 3 -> SummaryScreen()
-                        else -> SettingsScreen(onOpenSync = { showSync = true })
+                        else -> SettingsScreen(onOpenSync = { showSync = true }, onOpenLog = { showLog = true })
                     }
                 }
                 BottomBar(tab) { tab = it }
@@ -676,7 +680,7 @@ fun SummaryScreen() {
 
 // ---------- 设置 ----------
 @Composable
-fun SettingsScreen(onOpenSync: () -> Unit) {
+fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
     val ctx = LocalContext.current
     var roundMin by remember(SyncManager.eddVersion) { mutableStateOf(Store.roundMin(ctx)) }
     var sound by remember { mutableStateOf(Store.soundOn(ctx)) }
@@ -858,7 +862,36 @@ fun SettingsScreen(onOpenSync: () -> Unit) {
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("胎动记录 v5.4 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Spacer(Modifier.height(14.dp))
+        // 运行日志（排查用）：独立开关，默认关；打开后可进入日志页查看
+        var logOn by remember { mutableStateOf(AppLog.enabled(ctx)) }
+        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+            Column(Modifier.padding(16.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().clickable(enabled = logOn) { onOpenLog() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("🧾 运行日志（排查用）", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
+                        Text(
+                            if (logOn) "已开启 · 点这里查看日志" else "开启后记录同步、配对等关键动作，供排查问题",
+                            fontSize = 11.sp, color = Ink2, modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                    Switch(checked = logOn, onCheckedChange = { on ->
+                        logOn = on
+                        AppLog.setEnabled(ctx, on)
+                    })
+                }
+                Text(
+                    "日志只存在这台手机的内存里（最近 600 条），不落盘、不同步、不上传；关闭开关即清空。",
+                    fontSize = 10.5.sp, color = Ink2, lineHeight = 14.sp, modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Text("胎动记录 v5.5 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = when (wipeKind) {
