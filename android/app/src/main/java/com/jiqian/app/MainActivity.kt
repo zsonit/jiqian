@@ -68,7 +68,10 @@ object Store {
 
     /** 宫缩是否在计时：存本次开始时间（0 = 没在计时）。App 与桌面组件共用这份状态 */
     fun runningContractionStart(ctx: Context) = sp(ctx).getLong(KEY_CTN_RUNNING, 0L)
-    fun setRunningContractionStart(ctx: Context, v: Long) = sp(ctx).edit().putLong(KEY_CTN_RUNNING, v).apply()
+    fun setRunningContractionStart(ctx: Context, v: Long) {
+        if (v > 0L) AppLog.i("宫缩开始计时")
+        sp(ctx).edit().putLong(KEY_CTN_RUNNING, v).apply()
+    }
 
     fun kicks(ctx: Context): MutableList<Long> {
         val a = JSONArray(sp(ctx).getString(KEY_KICKS, "[]"))
@@ -83,6 +86,7 @@ object Store {
         val l = kicks(ctx); l.add(System.currentTimeMillis())
         val a = JSONArray(); l.forEach { a.put(it) }
         sp(ctx).edit().putString(KEY_KICKS, a.toString()).apply()
+        AppLog.i("记胎动 +1（共 ${l.size} 条）")
         SyncManager.onDataChanged()
         Widgets.refresh(ctx)
     }
@@ -93,6 +97,7 @@ object Store {
             val removed = l.removeAt(l.size - 1)
             // 撤销也要跨端生效：写墓碑（以发生时间毫秒为锚点），对端会删掉同一条
             SyncManager.addTombstone("ke@$removed")
+            AppLog.i("撤销上一次胎动")
         }
         val a = JSONArray(); l.forEach { a.put(it) }
         sp(ctx).edit().putString(KEY_KICKS, a.toString()).apply()
@@ -103,8 +108,10 @@ object Store {
     fun clearKicks(ctx: Context) {
         if (!SyncManager.canEdit) return
         // 部分清空：逐条写墓碑，让对端也删掉这些胎动
+        val n = kicks(ctx).size
         kicks(ctx).forEach { SyncManager.addTombstone("ke@$it") }
         sp(ctx).edit().putString(KEY_KICKS, "[]").apply()
+        AppLog.w("清空胎动 $n 条")
         SyncManager.onDataChanged()
         Widgets.refresh(ctx)
     }
@@ -129,6 +136,7 @@ object Store {
         val l = contractions(ctx); l.add(Pair(start, end))
         val a = JSONArray(); l.forEach { a.put(JSONObject().put("s", it.first).put("e", it.second)) }
         sp(ctx).edit().putString(KEY_CONTRACTIONS, a.toString()).apply()
+        AppLog.i("宫缩结束保存（%d分%02d秒，共 %d 次）".format((end - start) / 60000, ((end - start) / 1000 % 60).toInt(), l.size))
         SyncManager.onDataChanged()
         Widgets.refresh(ctx)
     }
@@ -136,8 +144,10 @@ object Store {
     fun clearContractions(ctx: Context) {
         if (!SyncManager.canEdit) return
         // 部分清空：逐条写墓碑（以开始时间为锚点），让对端也删掉这些宫缩
+        val n = contractions(ctx).size
         contractions(ctx).forEach { SyncManager.addTombstone("ce@${it.first}") }
         sp(ctx).edit().putString(KEY_CONTRACTIONS, "[]").apply()
+        AppLog.w("清空宫缩 $n 次")
         SyncManager.onDataChanged()
         Widgets.refresh(ctx)
     }
@@ -175,6 +185,7 @@ object Store {
         l.removeAll { it.at == at }
         l.add(WeightItem("w$at", at, rounded))
         saveWeights(ctx, l)
+        AppLog.i("记体重 $rounded kg（共 ${l.size} 条）")
         SyncManager.onDataChanged()
         return true
     }
@@ -186,13 +197,16 @@ object Store {
         saveWeights(ctx, l)
         // 以称重时间为锚点写墓碑，对端同一条一并删除
         SyncManager.addTombstone("we@${item.at}")
+        AppLog.i("删除体重记录")
         SyncManager.onDataChanged()
     }
 
     fun clearWeights(ctx: Context) {
         if (!SyncManager.canEdit) return
+        val n = weights(ctx).size
         weights(ctx).forEach { SyncManager.addTombstone("we@${it.at}") }
         saveWeights(ctx, emptyList())
+        AppLog.w("清空体重 $n 条")
         SyncManager.onDataChanged()
     }
 
@@ -291,6 +305,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppLog.init(applicationContext)
+        AppLog.i("App 启动")
         SyncManager.bootstrap(applicationContext)
         SyncNotifier.ensureChannel(applicationContext)
         // 已配对才申请通知权限（有人申请编辑权限时要能提醒到）
@@ -323,11 +338,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppLog.i("App 进入前台")
         SyncManager.onForeground()
     }
 
     override fun onPause() {
         super.onPause()
+        AppLog.i("App 退到后台")
         SyncManager.onBackground()
     }
 }

@@ -76,6 +76,7 @@ enum ContractionRecorder {
         let event = ContractionEvent(sessionID: targetSession.id, startedAt: date, source: source)
         ctx.insert(event)
         try ctx.save()
+        AppLog.i("Ctn", "宫缩开始计时（来源 \(source.rawValue)）")
         SyncManager.shared.onDataChanged()
         return ContractionOutcome(started: true)
     }
@@ -101,6 +102,7 @@ enum ContractionRecorder {
         }
         event.gap = gap
         try ctx.save()
+        AppLog.i("Ctn", "宫缩结束保存（\(Int(duration)) 秒）")
         SyncManager.shared.onDataChanged()
         return ContractionOutcome(ended: true,
                                   duration: duration,

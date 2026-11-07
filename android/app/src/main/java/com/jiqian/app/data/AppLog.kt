@@ -35,6 +35,7 @@ object AppLog {
     fun setEnabled(ctx: Context, on: Boolean) {
         prefs(ctx).edit().putBoolean(KEY_ENABLED, on).apply()
         if (!on) clear()   // 关掉即清空，不留残留
+        else i("运行日志已开启")
     }
 
     fun i(msg: String) = record("i", msg) { Log.i(TAG, msg) }

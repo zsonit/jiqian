@@ -26,7 +26,11 @@ enum AppLog {
         get { UserDefaults.standard.bool(forKey: enabledKey) }
         set {
             UserDefaults.standard.set(newValue, forKey: enabledKey)
-            if !newValue { clear() }   // 关掉即清空，不留残留
+            if newValue {
+                i("Log", "运行日志已开启")
+            } else {
+                clear()   // 关掉即清空，不留残留
+            }
         }
     }
 

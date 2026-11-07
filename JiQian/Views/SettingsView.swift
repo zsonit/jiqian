@@ -242,7 +242,8 @@ struct SettingsView: View {
                 Section {
                     Toggle("运行日志（排查用）", isOn: $diagLogOn)
                         .onChange(of: diagLogOn) { _, on in
-                            if !on { AppLog.clear() }   // 关闭即清空，不留残留
+                            // 开关走 @AppStorage 不经过 AppLog.isEnabled，这里补一条记录
+                            if on { AppLog.i("Log", "运行日志已开启") } else { AppLog.clear() }
                         }
                     if diagLogOn {
                         NavigationLink {

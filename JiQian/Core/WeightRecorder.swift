@@ -42,6 +42,7 @@ enum WeightRecorder {
         let entry = WeightEntry(at: date, kg: (kg * 10).rounded() / 10)
         ctx.insert(entry)
         try ctx.save()
+        AppLog.i("Weight", "记体重 \(entry.kg) kg")
         SyncManager.shared.onDataChanged()
         return entry
     }
@@ -55,6 +56,7 @@ enum WeightRecorder {
         ctx.delete(entry)
         try ctx.save()
         SyncManager.addTombstone(SyncTombstone.weight(anchor))
+        AppLog.i("Weight", "删除体重记录")
         SyncManager.shared.onDataChanged()
         return true
     }
@@ -70,6 +72,7 @@ enum WeightRecorder {
             ctx.delete(entry)
         }
         try ctx.save()
+        AppLog.w("Weight", "清空体重 \(list.count) 条")
         SyncManager.shared.onDataChanged()
     }
 

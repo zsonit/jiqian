@@ -73,6 +73,7 @@ enum KickRecorder {
         SyncManager.shared.onDataChanged()
 
         let total = try events(of: session.id, in: ctx).count
+        AppLog.i("Kick", "记胎动 +1（本轮第 \(total) 次，来源 \(source.rawValue)）")
         return KickOutcome(saved: true,
                            duplicate: false,
                            count: total,
@@ -142,6 +143,7 @@ enum KickRecorder {
         try ctx.save()
         // 撤销也要跨端生效：写墓碑，对端会删掉同一条
         SyncManager.addTombstone(SyncTombstone.kick(anchor))
+        AppLog.i("Kick", "撤销上一次胎动")
         SyncManager.shared.onDataChanged()
         return true
     }
