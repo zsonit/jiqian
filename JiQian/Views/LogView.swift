@@ -5,6 +5,8 @@ import SwiftUI
 struct LogView: View {
     @State private var entries: [AppLog.Entry] = []
     @State private var toast: String?
+    /// 导出文件：最近一次刷新时把日志写进临时目录，供分享面板带出去
+    @State private var exportURL: URL?
 
     var body: some View {
         Group {
@@ -45,6 +47,15 @@ struct LogView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 14) {
+                    if let exportURL {
+                        ShareLink(item: exportURL) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(Pal.teal)
+                        }
+                        .disabled(entries.isEmpty)
+                    }
+
                     Button {
                         copyAll()
                     } label: {
@@ -130,6 +141,27 @@ struct LogView: View {
 
     private func refresh() {
         entries = AppLog.snapshot()
+        writeExportFile()
+    }
+
+    /// 把当前日志写成临时目录里的 txt（固定文件名，每次刷新覆盖），供 ShareLink 导出
+    private func writeExportFile() {
+        guard !entries.isEmpty else {
+            exportURL = nil
+            return
+        }
+        let header = "记签运行日志 · 导出于 \(Fmt.hhmmss(Date())) · 共 \(entries.count) 条\n\n"
+        let text = header + entries.map { entry in
+            "\(Fmt.hhmmss(entry.t)) [\(levelName(entry.level))] \(entry.text)"
+        }.joined(separator: "\n") + "\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("jiqian-log.txt")
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            exportURL = url
+        } catch {
+            AppLog.w("Log", "导出文件写入失败：\(error.localizedDescription)")
+            exportURL = nil
+        }
     }
 
     private func copyAll() {

@@ -69,6 +69,38 @@ fun LogScreen(onClose: () -> Unit) {
         }.start()
     }
 
+    val platformCtx = androidx.compose.ui.platform.LocalContext.current
+
+    /** 导出为 .txt 文件：写进 cacheDir/log-export/，经 FileProvider 调系统分享（微信 / 邮件 / 保存到文件等） */
+    fun exportLog() {
+        val ctx = platformCtx
+        Thread {
+            val lines = AppLog.snapshot()
+            if (lines.isEmpty()) return@Thread
+            try {
+                val dir = java.io.File(ctx.cacheDir, "log-export").apply { mkdirs() }
+                val name = "jiqian-log-%s.txt".format(
+                    java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+                )
+                val file = java.io.File(dir, name)
+                file.writeText(lines.joinToString("\n") + "\n")
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    ctx, ctx.packageName + ".fileprovider", file
+                )
+                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    putExtra(android.content.Intent.EXTRA_SUBJECT, name)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                ctx.startActivity(android.content.Intent.createChooser(intent, "导出运行日志"))
+            } catch (e: Exception) {
+                AppLog.w("导出日志失败：${e.message}")
+                showToast("导出失败：${e.message ?: "未知错误"}")
+            }
+        }.start()
+    }
+
     LaunchedEffect(lines.size) {
         if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size - 1)
     }
@@ -86,7 +118,7 @@ fun LogScreen(onClose: () -> Unit) {
                 Spacer(Modifier.width(40.dp))
             }
             Text(
-                "最近 ${lines.size} 条 · 只存在本机内存里，不同步不上传；关闭设置里的开关即清空",
+                "最近 ${lines.size} 条 · 只存在本机内存里，不同步不上传；可复制或导出为 txt 文件，关闭开关即清空",
                 fontSize = 11.sp, color = Ink2, lineHeight = 15.sp,
                 modifier = Modifier.padding(top = 6.dp)
             )
@@ -104,6 +136,15 @@ fun LogScreen(onClose: () -> Unit) {
                 ) {
                     Text("复制全部", fontSize = 13.sp, fontWeight = FontWeight.Bold,
                         color = if (lines.isEmpty()) Ink2 else Brand)
+                }
+                Box(
+                    Modifier
+                        .background(Teal.copy(alpha = 0.1f), RoundedCornerShape(50))
+                        .clickable(enabled = lines.isNotEmpty()) { exportLog() }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text("导出文件", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                        color = if (lines.isEmpty()) Ink2 else Teal)
                 }
                 Box(
                     Modifier

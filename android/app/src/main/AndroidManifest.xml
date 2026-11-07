@@ -63,5 +63,16 @@
         <receiver
             android:name=".widget.WidgetActionReceiver"
             android:exported="false" />
+
+        <!-- 运行日志导出：经 FileProvider 把日志文件分享给微信 / 邮件等（只读授权，不对外暴露目录） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>
