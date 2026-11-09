@@ -426,6 +426,15 @@ enum SnapshotIO {
                                       src: w.sourceRaw))
         }
         snap.we = ws
+        // 数组顺序与 merge() 的输出严格一致（ks/cs 按 s、ke 按 at、ce 按 s、we 按 at）。
+        // SwiftData fetch 的顺序是不确定的，若不在这里排好，「本机快照 vs 合并结果」
+        // 会因为顺序差异永远不相等 —— 表现就是每轮同步都假报「已应用对方数据」、
+        // 写端每次都假推送。排序后，只有真正的内容差异才算「有新数据」。
+        snap.ks.sort { $0.s < $1.s }
+        snap.ke.sort { $0.at < $1.at }
+        snap.cs.sort { $0.s < $1.s }
+        snap.ce.sort { $0.s < $1.s }
+        snap.we?.sort { $0.at < $1.at }
         return snap
     }
 

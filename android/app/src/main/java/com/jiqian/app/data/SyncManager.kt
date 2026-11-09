@@ -61,6 +61,8 @@ object SyncManager {
     private const val UNDECRYPTABLE = "undecryptable"
     /// 云端还没有这一行的标记
     private const val EMPTY = "empty"
+    /** 前台自动完整同步的兜底间隔：rev 判定万一失灵，最多这么久也必拉一次 */
+    private const val FORCE_SYNC_INTERVAL = 60_000L
 
     private var appContext: Context? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -74,6 +76,8 @@ object SyncManager {
     private var lastRev: Long = 0L
     /** 上次记「失败类」日志的时刻（节流：同类错误最多每分钟一条） */
     private var lastFailLogAt = 0L
+    /** 上次前台强制完整同步的时刻：即使 rev 判定失灵也保证数据最终到位 */
+    @Volatile private var lastAutoFullSyncAt = 0L
 
     private val pollRunnable = object : Runnable {
         override fun run() {
@@ -449,12 +453,21 @@ object SyncManager {
         }
     }
 
-    /** 轻量检查：只拉版本号，变了才真同步 */
+    /** 轻量检查：只拉版本号，变了才真同步；另有 60 秒兜底强制同步 */
     private fun pollOnce() {
         if (busy) return
         val code = pairedCode ?: return
         // 本机有改动还没推成功（上一轮撞上忙碌被跳过了）：直接补推，别干等 rev 变化
         if (localDirty) {
+            syncNow(manual = false)
+            return
+        }
+        // 兜底保险丝：即使 rev 判定失灵（rev 被异常消费、接口返回异常值等），
+        // 前台最多 FORCE_SYNC_INTERVAL 也必做一次完整同步，数据最终一定到位。
+        // 不单独记日志（syncNow 内部已有「同步完成」行），避免把运行日志刷满
+        val now = System.currentTimeMillis()
+        if (lastAutoFullSyncAt == 0L || now - lastAutoFullSyncAt >= FORCE_SYNC_INTERVAL) {
+            lastAutoFullSyncAt = now
             syncNow(manual = false)
             return
         }
@@ -512,6 +525,49 @@ object SyncManager {
         val w = added(local.optJSONArray("we"), merged.optJSONArray("we"))
         if (w > 0) parts.add("体重${w}条")
         return if (parts.isEmpty()) "无新记录" else "新收到 " + parts.joinToString("、")
+    }
+
+    /**
+     * 「有效数据」投影：把快照压缩成本机 Store 能完整表达的字段集合，输出稳定的规范字符串。
+     * 用于「合并结果 vs 本机快照」的比较 —— 直接 toString 比较会因字段顺序、
+     * iOS 独有字段（ke.note/sid、ce.gap/sus、we.note 等）永远不相等，导致每轮假应用假推送。
+     */
+    private fun significant(snap: JSONObject): String {
+        val out = JSONObject()
+        out.put("cl", snap.optLong("cl", 0L))
+        fun sorted(name: String, key: (JSONObject) -> Long): List<JSONObject> =
+            snap.optJSONArray(name)?.let { a ->
+                (0 until a.length()).mapNotNull { a.optJSONObject(it) }.sortedBy(key)
+            } ?: emptyList()
+        val ke = JSONArray()
+        sorted("ke") { it.optLong("at", 0L) }.forEach {
+            ke.put(JSONObject().put("at", it.optLong("at", 0L)))
+        }
+        out.put("ke", ke)
+        val ce = JSONArray()
+        sorted("ce") { it.optLong("s", 0L) }.forEach {
+            ce.put(JSONObject().put("s", it.optLong("s", 0L)).put("e", it.optLong("e", 0L)))
+        }
+        out.put("ce", ce)
+        // 轮次透传（iOS 数据，安卓只转发）：内容原样、顺序稳定即可
+        out.put("ks", snap.optJSONArray("ks")?.toString() ?: "[]")
+        out.put("cs", snap.optJSONArray("cs")?.toString() ?: "[]")
+        val we = JSONArray()
+        sorted("we") { it.optLong("at", 0L) }.forEach {
+            we.put(JSONObject()
+                .put("id", it.optString("id"))
+                .put("at", it.optLong("at", 0L))
+                .put("kg", it.optDouble("kg", 0.0)))
+        }
+        out.put("we", we)
+        val del = JSONArray()
+        sorted("del") { it.optLong("t", 0L) }.forEach {
+            del.put(JSONObject().put("id", it.optString("id")).put("t", it.optLong("t", 0L)))
+        }
+        out.put("del", del)
+        out.put("st", snap.optJSONObject("st")?.toString() ?: "")
+        out.put("acl", aclKey(snap.optJSONObject("acl")))
+        return out.toString()
     }
 
     private fun prefs() = appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -916,7 +972,9 @@ object SyncManager {
         snap.put("ks", ex.optJSONArray("ks") ?: JSONArray())
         snap.put("cs", ex.optJSONArray("cs") ?: JSONArray())
         snap.put("cl", cl())
-        snap.put("del", tombstones())
+        // 墓碑规范化成与 merge() 输出一致的形状（去过期、按时间排序、限量）：
+        // 不然「本机快照 vs 合并结果」永远不相等，每轮假应用 + 假推送
+        snap.put("del", pruneTombstones(tombstones()))
         // 权限表随快照加密同步（创建者首次同步时由 pendingOwnerAcl 登记）
         storedAcl()?.let { snap.put("acl", it) }
         if (pendingOwnerAcl && storedAcl() == null) {
@@ -1302,6 +1360,9 @@ object SyncManager {
             // owner 下发的管理动作（清除 / 解绑）优先于一切数据同步
             handleAdminAction(remote.state)?.let { return it }
             applySnapshot(remote.state)
+            // 数据真正落地了才记「已看过」这一版（apply 失败会在上面抛异常提前返回，
+            // rev 不被消费，下一轮轮询会重拉这版数据）
+            setRev(remote.rev)
             refreshAccess(remote.state.optJSONObject("acl"))
             markSynced()
             AppLog.i("已拉取对方数据：${diffSummary(local, remote.state)}")
@@ -1336,13 +1397,21 @@ object SyncManager {
                     aclKey(merged.optJSONObject("acl")) != aclKey(remote.state.optJSONObject("acl"))) {
                     mustPush = true
                 }
-                if (merged.toString() != local.toString()) {
+                // 用「有效投影」比较，而不是整对象 toString：
+                // iOS 快照里 ke/ce/we 带 note、sid、gap 等安卓 Store 存不下的字段，
+                // 本机每次重建快照都会丢掉它们 —— 直接比较会永远不相等，
+                // 表现就是每轮假报「已应用对方数据」+ 假推送（rev 被凭空顶高，对端跟着空转）
+                if (significant(merged) != significant(local)) {
                     applySnapshot(merged)
                     appliedFromRemote = true
                     AppLog.i("已应用对方数据：${diffSummary(local, merged)}")
                     mustPush = true
                 }
             }
+            // rev 只在真正拿到数据之后才记「已看过」（v5.7 只防住了「解密失败」这一种，
+            // 这里补上「apply 失败」：上面 apply 抛错会进 catch 提前返回，rev 不被消费，
+            // 下一轮轮询会重拉这一版，数据不会静默丢失）
+            remote?.let { setRev(it.rev) }
             // 只读端：本机记录改动一律不推；只有「申请/撤销申请」或首次加入占行时才推，
             // 且推送内容里记录部分原样用云端版本（只更新 acl），保证只读端改不了云端数据
             if (!localCanEdit) {
@@ -1357,6 +1426,9 @@ object SyncManager {
                     if (prefs()?.getString(KEY_ACL, null) == aclAtStart) merged.optJSONObject("acl")
                     else storedAcl()
                 )
+                // 拉取成功（哪怕没有新记录）也算同步过一次：只读端从不推送，
+                // 不在这里更新「上次同步」的话，页面会永远停在很久以前的旧时间
+                markSynced()
                 lastMessage = if (appliedFromRemote) "已收到对方新数据" else "已是最新"
                 AppLog.i("同步完成：$lastMessage（rev=$lastRev，${if (computeCanEdit()) "可写" else "只读"}）")
                 return SyncResult(true, lastMessage!!)
@@ -1384,7 +1456,7 @@ object SyncManager {
                 retryPending = true
             }
             markSynced()
-            val mergedNew = remote != null && merged.toString() != local.toString()
+            val mergedNew = remote != null && significant(merged) != significant(local)
             lastMessage = if (mergedNew) "已同步（收到对方的新记录）" else "已同步"
             AppLog.i("同步完成：$lastMessage（${diffSummary(local, merged)}，rev=$lastRev）")
             return SyncResult(true, lastMessage ?: "已同步")
@@ -1410,7 +1482,7 @@ object SyncManager {
 
     // MARK: 网络与快照
 
-    private class RemoteSnapshot(val state: JSONObject, val updatedBy: String)
+    private class RemoteSnapshot(val state: JSONObject, val updatedBy: String, val rev: Long = 0L)
 
     /** 查码是否已被占用；null = 网络失败 */
     private fun codeExists(code: String): Boolean? {
@@ -1443,10 +1515,11 @@ object SyncManager {
         val arr = JSONArray(body)
         if (arr.length() == 0) return RemoteSnapshot(JSONObject(), EMPTY)
         val row = arr.optJSONObject(0) ?: return null
-        // rev 只在真正拿到数据后才记下：解密失败等异常不能消费 rev，
-        // 否则下一次轮询会误以为「这版已经看过」，对方的数据就再也不拉了
+        // 注意：这里只带回 rev，不记「已看过」。是否消费由调用方决定 ——
+        // 数据真正落地（apply 成功）之后才 setRev，apply 失败就留给下一轮重拉
         val remoteRev = row.optLong("rev", 0L)
-        val payload = row.optJSONObject("payload") ?: return RemoteSnapshot(JSONObject(), EMPTY)
+        val payload = row.optJSONObject("payload")
+            ?: return RemoteSnapshot(JSONObject(), EMPTY, remoteRev)
 
         // 端到端加密信封 —— 先采用云端盐，再用它解
         if (payload.has("ct")) {
@@ -1457,14 +1530,12 @@ object SyncManager {
                 logThrottled("云端密文无法解密（密钥不一致），本轮跳过，不覆盖云端")
                 return RemoteSnapshot(JSONObject(), UNDECRYPTABLE)
             }
-            setRev(remoteRev)
-            return RemoteSnapshot(JSONObject(plain), row.optString("updated_by"))
+            return RemoteSnapshot(JSONObject(plain), row.optString("updated_by"), remoteRev)
         }
 
         // 旧格式兼容：直接就是明文互通 JSON
         AppLog.i("检测到旧版明文数据，本次同步后自动改成密文")
-        setRev(remoteRev)
-        return RemoteSnapshot(payload, row.optString("updated_by"))
+        return RemoteSnapshot(payload, row.optString("updated_by"), remoteRev)
     }
 
     /** 推送：payload 列存加密信封，updated_by 记录来源设备，rev 供对端轻度轮询发现变化 */

@@ -40,6 +40,9 @@ final class SyncManager: ObservableObject {
     private static let keyNotifiedReqs = "jq_sync_acl_notified"
     /// 前台自动检查间隔：对端改完后最多这么久就能看到
     private static let pollInterval: TimeInterval = 6
+    /// 兜底强制同步间隔：即使 rev 判定失灵（被提前消费等极端情况），
+    /// 前台最多这么久也必做一次完整同步，保证数据最终一定到位
+    private static let forceSyncInterval: TimeInterval = 60
     /// 本机改动后的防抖：够快、又能合并连续输入
     private static let debounce: TimeInterval = 1.2
 
@@ -64,6 +67,8 @@ final class SyncManager: ObservableObject {
     private let syncLock = NSLock()
     private var isSyncing = false
     private var lastRev: Int64 = 0
+    /// 上次「兜底强制同步」的时刻（前台轮询用）
+    private var lastAutoFullSyncAt: TimeInterval = 0
     /// 上次记「失败类」日志的时刻（节流：同类错误最多每分钟一条）
     private var lastFailLogAt: TimeInterval = 0
 
@@ -127,7 +132,13 @@ final class SyncManager: ObservableObject {
 
     private func withLocalMarks(_ snap: inout SyncSnapshot) {
         snap.cl = Self.clearedAt()
-        snap.del = Self.tombstones()
+        // 墓碑规范化成与 merge() 输出完全一致的形状（去重、过期修剪、按 id 排序）：
+        // 不然「本机快照 vs 合并结果」永远不相等，每轮同步都会假报「已应用对方数据」、
+        // 写端还会假推送（凭空把 rev 顶上去，触发对端无意义的拉取）
+        let cutoff = SnapshotIO.ms(Date()) - SyncTombstone.ttlMs
+        var byId: [String: SyncSnapshot.Del] = [:]
+        for d in Self.tombstones() where d.t >= cutoff { byId[d.id] = d }
+        snap.del = byId.values.sorted { $0.id < $1.id }
     }
 
     // MARK: 前台自动刷新
@@ -172,11 +183,20 @@ final class SyncManager: ObservableObject {
         pollTimer = nil
     }
 
-    /// 轻量检查：只拉版本号，变了才真同步
+    /// 轻量检查：只拉版本号，变了才真同步；另有 60 秒兜底强制同步
     private func pollOnce() {
         guard let code = pairedCode else { return }
         // 本机有改动还没推成功（上一轮撞上忙碌被跳过了）：直接补推，别干等 rev 变化
         if localDirty {
+            _ = syncNow(manual: false)
+            return
+        }
+        // 兜底保险丝：即使 rev 判定失灵（rev 被异常消费、接口返回异常值等），
+        // 前台最多 forceSyncInterval 也必做一次完整同步，数据最终一定到位。
+        // 不单独记日志（syncNow 内部已有「同步完成」行），避免把运行日志刷满
+        let now = Date().timeIntervalSince1970
+        if lastAutoFullSyncAt == 0 || now - lastAutoFullSyncAt >= Self.forceSyncInterval {
+            lastAutoFullSyncAt = now
             _ = syncNow(manual: false)
             return
         }
@@ -628,10 +648,12 @@ final class SyncManager: ObservableObject {
             return SyncOutcome(ok: false, message: "本机数据读取失败")
         }
         withLocalMarks(&local)
-        // 本机已知的权限表并入快照（创建者首次同步时在这里登记为 owner）
+        // 本机已知的权限表并入快照（创建者首次同步时在这里登记为 owner）。
+        // 走一遍合并器把权限表规范化（排序、过期修剪），与 merge() 的输出形状一致：
+        // 不然「本机快照 vs 合并结果」会因顺序差异永远不相等，每轮假推送
         if local.acl == nil {
             if let saved = storedACL() {
-                local.acl = saved
+                local.acl = SyncACLResolver.merge(local: saved, remote: nil, pendingOwner: nil)
             } else if pendingOwnerAcl {
                 local.acl = SyncSnapshot.ACL(owner: deviceId, writers: [deviceId], req: [])
             }
@@ -666,6 +688,9 @@ final class SyncManager: ObservableObject {
                 AppLog.e("Sync", "应用对方数据失败：\(error)")
                 return SyncOutcome(ok: false, message: "应用对方数据失败")
             }
+            // 数据真正落地了才记「已看过」这一版（apply 失败会在上面提前返回，
+            // rev 不被消费，下一轮轮询会重拉这版数据）
+            setRev(snapshot.rev)
             refreshAccess(snapshot.state.acl)
             markSynced()
             AppLog.i("Sync", "已拉取对方数据：\(diffSummary(from: local, to: snapshot.state))")
@@ -683,50 +708,61 @@ final class SyncManager: ObservableObject {
             logThrottled(msg)
             return SyncOutcome(ok: false, message: msg)
         }
+        guard let snapshot = remoteSnapshot else {
+            // 拉不到云端（网络失败）：本轮连推都不推 —— 推了等于拿「没合并过远端」的
+            // 快照盖云端，会丢掉对方只有云端才有的记录。localDirty 保持，稍后自动补推
+            AppLog.w("Sync", "拉取云端失败：网络不可用，本轮跳过（不推送）")
+            return SyncOutcome(ok: false, message: manual ? "网络不可用" : "")
+        }
         var merged = local
         // 这一轮真的从对方落到新数据了（只读端也能拉到，所以单独立标记）
         var appliedFromRemote = false
         // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
-        var mustPush = localDirty || lastRev == 0 || remoteSnapshot?.updatedBy == Self.empty
-        if let snapshot = remoteSnapshot {
-            // owner 下发的管理动作（清除 / 解绑）优先于一切数据同步：
-            // 命中就就地处理并返回，绝不推送（防止把本机数据盖回云端）
-            if let admin = handleAdminCommands(in: snapshot.state) {
-                return admin
-            }
-            merged = SnapshotIO.merge(local: local, remote: snapshot.state)
-            // 权限表合并（两端规则一致）：owner 以云端为准、writers 并集、申请并集减去已授权
-            merged.acl = SyncACLResolver.merge(local: local.acl,
-                                               remote: snapshot.state.acl,
-                                               pendingOwner: pendingOwnerAcl ? deviceId : nil)
-            // 申请 / 撤销申请 / 审批本身要推一次：只要本机权限表和云端不一致就推。
-            // 不能只比较「合并结果 vs 本机旧值」，撤销时合并结果可能正好等于本机旧值，
-            // 那样这一轮就不会推送，对方永远看不到撤销
-            if isAclDirty() && merged.acl != snapshot.state.acl { mustPush = true }
-            if merged != local {
-                do {
-                    try SnapshotIO.apply(merged, to: ctx, maskedFor: deviceId)
-                    appliedFromRemote = true
-                    AppLog.i("Sync", "已应用对方数据：\(diffSummary(from: local, to: merged))")
-                } catch {
-                    AppLog.e("Sync", "应用合并结果失败：\(error)")
-                    return SyncOutcome(ok: false, message: "应用合并结果失败")
-                }
-                mustPush = true
-            }
+        var mustPush = localDirty || lastRev == 0 || snapshot.updatedBy == Self.empty
+        // owner 下发的管理动作（清除 / 解绑）优先于一切数据同步：
+        // 命中就就地处理并返回，绝不推送（防止把本机数据盖回云端）
+        if let admin = handleAdminCommands(in: snapshot.state) {
+            return admin
         }
+        merged = SnapshotIO.merge(local: local, remote: snapshot.state)
+        // 权限表合并（两端规则一致）：owner 以云端为准、writers 并集、申请并集减去已授权
+        merged.acl = SyncACLResolver.merge(local: local.acl,
+                                           remote: snapshot.state.acl,
+                                           pendingOwner: pendingOwnerAcl ? deviceId : nil)
+        // 申请 / 撤销申请 / 审批本身要推一次：只要本机权限表和云端不一致就推。
+        // 不能只比较「合并结果 vs 本机旧值」，撤销时合并结果可能正好等于本机旧值，
+        // 那样这一轮就不会推送，对方永远看不到撤销
+        if isAclDirty() && merged.acl != snapshot.state.acl { mustPush = true }
+        if merged != local {
+            do {
+                try SnapshotIO.apply(merged, to: ctx, maskedFor: deviceId)
+                appliedFromRemote = true
+                AppLog.i("Sync", "已应用对方数据：\(diffSummary(from: local, to: merged))")
+            } catch {
+                AppLog.e("Sync", "应用合并结果失败：\(error)")
+                return SyncOutcome(ok: false, message: "应用合并结果失败")
+            }
+            mustPush = true
+        }
+        // rev 只在真正拿到数据之后才记「已看过」（v5.7 只防住了「解密失败」这一种，
+        // 这里补上「apply 失败」：上面 apply 抛错会提前 return，rev 不被消费，
+        // 下一轮轮询会重拉这一版，数据不会静默丢失）
+        setRev(snapshot.rev)
 
         // 只读端：本机记录改动一律不推；只有「申请/撤销申请」或首次加入占行时才推，
         // 且推送内容里记录部分原样用云端版本（只更新 acl），保证只读端改不了云端数据
         if !computeCanEdit() {
-            let aclNeedsPush = isAclDirty() && merged.acl != remoteSnapshot?.state.acl
-            mustPush = lastRev == 0 || remoteSnapshot?.updatedBy == Self.empty || aclNeedsPush
+            let aclNeedsPush = isAclDirty() && merged.acl != snapshot.state.acl
+            mustPush = lastRev == 0 || snapshot.updatedBy == Self.empty || aclNeedsPush
         }
 
         // 本机没改、云端也没新东西：什么都不推，避免两端互相蹭出无限推送
         if !mustPush {
             // 同步途中本机权限表被改过（点了申请/审批）：以本机为准，别被合并结果盖掉
             refreshAccess(storedACL() == aclAtStart ? merged.acl : storedACL())
+            // 拉取成功（哪怕没有新记录）也算同步过一次：只读端从不推送，
+            // 不在这里更新「上次同步」的话，页面会永远停在很久以前的旧时间
+            markSynced()
             let endMsg = appliedFromRemote ? "已收到对方新数据" : "已是最新"
             DispatchQueue.main.async { self.lastMessage = endMsg }
             AppLog.i("Sync", "同步完成：\(endMsg)（rev=\(lastRev)，\(computeCanEdit() ? "可写" : "只读")）")
@@ -734,8 +770,8 @@ final class SyncManager: ObservableObject {
         }
 
         var pushSnapshot = merged
-        if !computeCanEdit(), let r = remoteSnapshot, r.updatedBy != Self.empty {
-            pushSnapshot = r.state
+        if !computeCanEdit(), snapshot.updatedBy != Self.empty {
+            pushSnapshot = snapshot.state
             pushSnapshot.acl = merged.acl
         }
 
@@ -794,17 +830,17 @@ final class SyncManager: ObservableObject {
         }
     }
 
-    private func fetchRemote(code: String) -> (state: SyncSnapshot, updatedBy: String)? {
+    private func fetchRemote(code: String) -> (state: SyncSnapshot, updatedBy: String, rev: Int64)? {
         let url = "\(Self.rest)?code=eq.\(code)&select=payload,updated_by,rev&limit=1"
         guard let (resp, status) = Self.request(method: "GET", url: url, body: nil), status == 200,
               let data = resp,
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return nil }
         guard let row = arr.first, let payload = row["payload"] as? [String: Any] else {
-            return (SyncSnapshot(), Self.empty)
+            return (SyncSnapshot(), Self.empty, 0)
         }
-        // rev 只在真正拿到数据后才记下：解密失败等异常不能消费 rev，
-        // 否则下一次轮询会误以为「这版已经看过」，对方的数据就再也不拉了
+        // 注意：这里只带回 rev，不记「已看过」。是否消费由调用方决定 ——
+        // 数据真正落地（apply 成功）之后才 setRev，apply 失败就留给下一轮重拉
         let remoteRev = (row["rev"] as? NSNumber)?.int64Value ?? 0
 
         // 端到端加密信封 —— 先采用云端盐，再用它解
@@ -815,10 +851,9 @@ final class SyncManager: ObservableObject {
                   let state = try? JSONDecoder().decode(SyncSnapshot.self, from: jsonData)
             else {
                 logThrottled("云端密文无法解密（密钥不一致），本轮跳过，不覆盖云端")
-                return (SyncSnapshot(), Self.undecryptable)
+                return (SyncSnapshot(), Self.undecryptable, 0)
             }
-            setRev(remoteRev)
-            return (state, row["updated_by"] as? String ?? "")
+            return (state, row["updated_by"] as? String ?? "", remoteRev)
         }
 
         // 旧格式兼容：直接就是明文互通 JSON
@@ -829,8 +864,7 @@ final class SyncManager: ObservableObject {
             return nil
         }
         AppLog.i("Sync", "检测到旧版明文数据，本次同步后自动改成密文")
-        setRev(remoteRev)
-        return (state, row["updated_by"] as? String ?? "")
+        return (state, row["updated_by"] as? String ?? "", remoteRev)
     }
 
     /// 推送：payload 列存加密信封，updated_by 记录来源设备；返回 HTTP 状态码（nil=网络失败）
