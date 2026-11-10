@@ -1270,10 +1270,11 @@ object SyncManager {
             val ub = mergeReqList("ub")
             val wp = mergeReqList("wp")
             // v5.11 重新准入：准入记录比解绑记录晚 = 已获准重新加入，不再从 writers 里剔除
-            val ra = mergeReqList("ra")
+            // 注意：形参 ra 是远端 ACL 本体，这里必须用别的名字，否则会遮蔽它
+            val raArr = mergeReqList("ra")
             val raMap = linkedMapOf<String, Long>()
-            for (i in 0 until ra.length()) {
-                val o = ra.optJSONObject(i) ?: continue
+            for (i in 0 until raArr.length()) {
+                val o = raArr.optJSONObject(i) ?: continue
                 raMap[o.optString("id")] = o.optLong("t", 0L)
             }
             val stillUnbound = mutableSetOf<String>()
@@ -1307,7 +1308,7 @@ object SyncManager {
                 .put("ub", ub)
                 .put("wp", wp)
                 .put("sm", sm)
-                .put("ra", ra))
+                .put("ra", raArr))
         }
         return out
     }
