@@ -1,4 +1,4 @@
-package com.jiqian.app.data
+package com.jiqian.app
 
 import android.content.Context
 import org.json.JSONObject
@@ -10,7 +10,7 @@ object BackupManager {
     private const val LAST = "last_backup_at"
     private const val AUTO_INTERVAL = 8 * 3600 * 1000L
 
-    private fun file(ctx: Context) = File(ctx.filesDir, "jiqian-backup.json")
+    private fun file(ctx: Context): File = File(ctx.filesDir, "jiqian-backup.json")
 
     fun lastBackupAt(ctx: Context): Long =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(LAST, 0L)
@@ -22,15 +22,21 @@ object BackupManager {
     }
 
     /** 导出当前全部记录为快照 JSON 并写盘（覆盖上一份备份） */
-    fun backupNow(ctx: Context): String = try {
-        val json = SyncManager.exportSnapshotJSON()
-            ?: return "备份失败：应用未就绪"
-        file(ctx).writeText(json)
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putLong(LAST, System.currentTimeMillis()).apply()
-        "已备份（胎动 ${JSONObject(json).optJSONArray("ke")?.length() ?: 0} 条）"
-    } catch (e: Exception) {
-        "备份失败：${e.message}"
+    fun backupNow(ctx: Context): String {
+        return try {
+            val json = SyncManager.exportSnapshotJSON()
+            if (json == null) {
+                "备份失败：应用未就绪"
+            } else {
+                file(ctx).writeText(json)
+                ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putLong(LAST, System.currentTimeMillis()).apply()
+                val n = JSONObject(json).optJSONArray("ke")?.length() ?: 0
+                "已备份（胎动 $n 条）"
+            }
+        } catch (e: Exception) {
+            "备份失败：${e.message}"
+        }
     }
 
     /** 从备份文件恢复本机记录（无视备份里的清空标记/墓碑；可写端会把恢复的数据推回云端） */
