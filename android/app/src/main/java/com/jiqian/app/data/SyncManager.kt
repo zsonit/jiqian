@@ -215,7 +215,7 @@ object SyncManager {
         }
         return acl.optString("owner") + "|" + writers.sorted().joinToString(",") +
             "|" + items("req") + "|" + items("rv") +
-            "|" + items("ub") + "|" + items("wp") + "|" + masksKey(acl)
+            "|" + items("ub") + "|" + items("wp") + "|" + items("ra") + "|" + masksKey(acl)
     }
 
     /** sm 掩码的规范化字符串（与顺序无关）：id:k|c|s|t，排序后拼接 */
@@ -626,7 +626,11 @@ object SyncManager {
             val code = (100000..999999).random().toString()
             val exists = codeExists(code)
             if (exists == false) {
+                // 先清干净上一个配对留下的所有状态（权限表、版本号、脏标记）：
+                // 否则旧配对的解绑/撤销记录会被合并进新码的权限表，把对方甚至本机踢成只读
+                unlink()
                 prefs()?.edit()?.putString(KEY_CODE, code)?.remove(KEY_SALT)?.apply()
+                pollHandler.postDelayed(pollRunnable, 1200)
                 // 本机是创建者：立即登记为 owner（可写），加入的设备默认只读。
                 // 先落本地再同步，即使首次推送失败，owner 身份也不会丢
                 saveAcl(JSONObject()
@@ -646,7 +650,11 @@ object SyncManager {
     fun joinPairing(code: String): SyncResult {
         val c = code.trim()
         if (!Regex("\\d{6}").matches(c)) return SyncResult(false, "配对码是 6 位数字")
+        // 先清干净上一个配对留下的所有状态：旧码的权限表（含解绑记录）绝不能带进新码，
+        // 否则合并规则会把旧解绑记录写进新码，把刚创建配对的那台手机踢成只读
+        unlink()
         prefs()?.edit()?.putString(KEY_CODE, c)?.remove(KEY_SALT)?.apply()
+        pollHandler.postDelayed(pollRunnable, 1200)
         val r = syncNow(manual = true)
         return if (r.ok) SyncResult(true, "配对成功：$c") else r
     }
@@ -682,6 +690,21 @@ object SyncManager {
         return out.sorted()
     }
 
+    /** 被解绑且尚未获准重新加入的设备（owner 端展示「允许重新加入」入口） */
+    fun unboundDevices(): List<String> {
+        val acl = storedAcl() ?: return emptyList()
+        if (acl.optString("owner") != deviceId()) return emptyList()
+        val me = deviceId()
+        val ids = mutableSetOf<String>()
+        acl.optJSONArray("ub")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val id = arr.optJSONObject(i)?.optString("id") ?: continue
+                if (id.isNotEmpty() && id != me) ids.add(id)
+            }
+        }
+        return ids.filter { isUnbound(acl, it) }.sorted()
+    }
+
     /** 某台设备当前的数据同步掩码（没有条目 = 全部同步） */
     fun maskFor(deviceId: String): JSONObject? = maskIn(storedAcl(), deviceId)
 
@@ -710,6 +733,23 @@ object SyncManager {
         acl?.optJSONArray(name)?.let { arr ->
             (0 until arr.length()).any { arr.optJSONObject(it)?.optString("id") == id }
         } ?: false
+
+    /** 记录的最新时刻（没有该设备的记录 = 0） */
+    private fun aclLatestT(acl: JSONObject?, name: String, id: String): Long =
+        acl?.optJSONArray(name)?.let { arr ->
+            var t = 0L
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optString("id") == id) t = maxOf(t, o.optLong("t", 0L))
+            }
+            t
+        } ?: 0L
+
+    /** 设备是否处于「已被解绑且未获准重新加入」状态：解绑记录比准入记录晚 = 仍被解绑（v5.11） */
+    private fun isUnbound(acl: JSONObject?, id: String): Boolean {
+        val ubT = aclLatestT(acl, "ub", id)
+        return ubT > 0 && ubT > aclLatestT(acl, "ra", id)
+    }
 
     /** 强制解绑一台设备：移出 writers、写解绑记录（只增不减） */
     fun forceUnbind(id: String): SyncResult {
@@ -745,6 +785,27 @@ object SyncManager {
         acl.put("req", req)
         saveAcl(acl)
         return pushAclChange("已强制解绑：对方约 6 秒内停止同步，本机记录保留")
+    }
+
+    /** owner 撤销对某设备的解绑：写「重新准入」记录（比解绑记录晚就生效）。
+     *  对方重新输入原配对码即可加入（默认仍为只读，需再批一次编辑权限）。 */
+    fun allowRejoin(id: String): SyncResult {
+        if (!isOwner()) return SyncResult(false, "只有创建配对码的手机可以管理设备")
+        if (id == deviceId()) return SyncResult(false, "本机无需重新加入")
+        val acl = storedAcl() ?: return SyncResult(false, "尚未配对")
+        val t = maxOf(System.currentTimeMillis(),
+            aclLatestT(acl, "ra", id) + 1, aclLatestT(acl, "ub", id) + 1)
+        val ra = JSONArray()
+        acl.optJSONArray("ra")?.let { old ->
+            for (i in 0 until old.length()) {
+                val o = old.optJSONObject(i) ?: continue
+                if (o.optString("id") != id) ra.put(o)
+            }
+        }
+        ra.put(JSONObject().put("id", id).put("t", t))
+        acl.put("ra", ra)
+        saveAcl(acl)
+        return pushAclChange("已允许重新加入：请对方重新输入原配对码")
     }
 
     /** 清除一台设备的数据：移出 writers、写清除命令 + 解绑记录 */
@@ -854,13 +915,14 @@ object SyncManager {
             unlink()
             return SyncResult(false, "管理员已清除本机数据，配对已解除")
         }
-        // 强制解绑：保留本机记录，解除配对（被解绑后原配对码也不能再加入）
-        if (aclHas(acl, "ub", me)) {
+        // 强制解绑：保留本机记录，解除配对（被解绑后原配对码也不能再加入，
+        // 除非创建者在设备管理里点了「允许重新加入」）
+        if (isUnbound(acl, me)) {
             appContext?.let {
-                SyncNotifier.notifyAdminAction(it, "已被管理员解绑", "同步已停止，本机记录保留；重新配对请联系创建者")
+                SyncNotifier.notifyAdminAction(it, "已被管理员解绑", "同步已停止，本机记录保留；如需重新配对，请创建者在「设备管理」里允许本机重新加入")
             }
             unlink()
-            return SyncResult(false, "已被管理员解绑：同步已停止，本机记录保留")
+            return SyncResult(false, "已被管理员解绑：请创建者在设备管理里允许重新加入后再配对")
         }
         return null
     }
@@ -1207,10 +1269,21 @@ object SyncManager {
             }
             val ub = mergeReqList("ub")
             val wp = mergeReqList("wp")
-            val ubIds = mutableSetOf<String>()
-            for (i in 0 until ub.length()) ubIds.add(ub.optJSONObject(i)?.optString("id") ?: "")
+            // v5.11 重新准入：准入记录比解绑记录晚 = 已获准重新加入，不再从 writers 里剔除
+            val ra = mergeReqList("ra")
+            val raMap = linkedMapOf<String, Long>()
+            for (i in 0 until ra.length()) {
+                val o = ra.optJSONObject(i) ?: continue
+                raMap[o.optString("id")] = o.optLong("t", 0L)
+            }
+            val stillUnbound = mutableSetOf<String>()
+            for (i in 0 until ub.length()) {
+                val o = ub.optJSONObject(i) ?: continue
+                val id = o.optString("id")
+                if (o.optLong("t", 0L) > (raMap[id] ?: 0L)) stillUnbound.add(id)
+            }
             val finalWriters = JSONArray()
-            writers.filter { it !in ubIds }.sorted().forEach { finalWriters.put(it) }
+            writers.filter { it !in stillUnbound }.sorted().forEach { finalWriters.put(it) }
             val smMap = linkedMapOf<String, JSONObject>()
             listOf(la, ra).forEach { a ->
                 a?.optJSONArray("sm")?.let { arr ->
@@ -1233,7 +1306,8 @@ object SyncManager {
                 .put("rv", rv)
                 .put("ub", ub)
                 .put("wp", wp)
-                .put("sm", sm))
+                .put("sm", sm)
+                .put("ra", ra))
         }
         return out
     }

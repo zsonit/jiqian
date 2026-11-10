@@ -388,6 +388,12 @@ final class SyncManager: ObservableObject {
         return acl.writers.filter { $0 != deviceId && $0 != acl.owner }.sorted()
     }
 
+    /// 被解绑且尚未获准重新加入的设备（owner 端展示「允许重新加入」入口）
+    var unboundDevices: [String] {
+        guard let acl = storedACL(), acl.owner == deviceId else { return [] }
+        return acl.unboundDevices().filter { $0 != deviceId }
+    }
+
     /// 某台设备当前的数据同步掩码（没有条目 = 全部同步）
     func maskFor(_ deviceID: String) -> SyncSnapshot.ACL.Mask? {
         storedACL()?.mask(deviceID: deviceID)
@@ -432,6 +438,21 @@ final class SyncManager: ObservableObject {
         aclv.wp.append(SyncSnapshot.ACL.Req(id: deviceID, t: tWP))
         saveACL(aclv)
         return pushAclChange(message: "已下发清除：对方联网后本机记录将被清空并解除配对")
+    }
+
+    /// owner 撤销对某设备的解绑：写「重新准入」记录（比解绑记录晚就生效）。
+    /// 对方重新输入原配对码即可加入（默认仍为只读，需再批一次编辑权限）。
+    func allowRejoin(_ deviceID: String) -> SyncOutcome {
+        guard isOwner else { return SyncOutcome(ok: false, message: "只有创建配对码的手机可以管理设备") }
+        guard deviceID != deviceId else { return SyncOutcome(ok: false, message: "本机无需重新加入") }
+        var aclv = storedACL() ?? SyncSnapshot.ACL(owner: deviceId, writers: [deviceId], req: [])
+        let t = max(SnapshotIO.ms(Date()),
+                    (aclv.ra.first { $0.id == deviceID }?.t ?? 0) + 1,
+                    (aclv.ub.first { $0.id == deviceID }?.t ?? 0) + 1)
+        aclv.ra.removeAll { $0.id == deviceID }
+        aclv.ra.append(SyncSnapshot.ACL.Req(id: deviceID, t: t))
+        saveACL(aclv)
+        return pushAclChange(message: "已允许重新加入：请对方重新输入原配对码")
     }
 
     /// 更新某台设备的数据同步掩码（胎动 / 宫缩 / 设置 / 体重，LWW 合并）
@@ -490,12 +511,13 @@ final class SyncManager: ObservableObject {
             clearLocal()
             return SyncOutcome(ok: false, message: "管理员已清除本机数据，配对已解除")
         }
-        // 强制解绑：保留本机记录，解除配对（被解绑后原配对码也不能再加入）
+        // 强制解绑：保留本机记录，解除配对（被解绑后原配对码也不能再加入，
+        // 除非创建者在设备管理里点了「允许重新加入」）
         if acl.unbound(deviceID: deviceId) {
             notifyAdminAction(title: "已被管理员解绑",
-                              body: "同步已停止，本机记录保留；重新配对请联系创建者")
+                              body: "同步已停止，本机记录保留；如需重新配对，请创建者在「设备管理」里允许本机重新加入")
             clearLocal()
-            return SyncOutcome(ok: false, message: "已被管理员解绑：同步已停止，本机记录保留")
+            return SyncOutcome(ok: false, message: "已被管理员解绑：请创建者在设备管理里允许重新加入后再配对")
         }
         return nil
     }
@@ -506,7 +528,11 @@ final class SyncManager: ObservableObject {
         for _ in 0..<6 {
             let code = String(format: "%06d", Int.random(in: 100000...999999))
             if codeExists(code) == false {
+                // 先清干净上一个配对留下的所有状态（权限表、版本号、脏标记）：
+                // 否则旧配对的解绑/撤销记录会被合并进新码的权限表，把对方甚至本机踢成只读
+                clearLocal()
                 Self.defaults.set(code, forKey: Self.keyCode)
+                startPolling()
                 Self.defaults.removeObject(forKey: Self.keySalt)
                 // 本机是创建者：立即登记为 owner（可写），加入的设备默认只读。
                 // 先落本地再同步，即使首次推送失败，owner 身份也不会丢
@@ -539,8 +565,11 @@ final class SyncManager: ObservableObject {
         guard code.count == 6, code.allSatisfy(\.isNumber) else {
             return SyncOutcome(ok: false, message: "配对码是 6 位数字")
         }
+        // 先清干净上一个配对留下的所有状态：旧码的权限表（含解绑记录）绝不能带进新码，
+        // 否则合并规则会把旧解绑记录写进新码，把刚创建配对的那台手机踢成只读
+        clearLocal()
         Self.defaults.set(code, forKey: Self.keyCode)
-        Self.defaults.removeObject(forKey: Self.keySalt)
+        startPolling()
         SyncNotifier.shared.requestAuthorization()
         let r = syncNow(manual: true)
         return r.ok ? SyncOutcome(ok: true, message: "配对成功：\(code)") : r

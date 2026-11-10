@@ -173,15 +173,18 @@ struct SyncSnapshot: Codable, Equatable {
         var rv: [Req] = []
         /// owner 强制解绑的设备（v5.3）
         var ub: [Req] = []
+        /// owner 允许重新加入的记录（v5.11）：同一设备取较晚的一条，准入记录压过解绑记录。
+        /// 没有它，被解绑的设备永远无法用原码重新配对，误触一次就废掉一台手机。
+        var ra: [Req] = []
         /// owner 下发的「清除数据」命令（v5.3），清除时会一并写 ub
         var wp: [Req] = []
         /// 每台设备的数据同步掩码（v5.3）
         var sm: [Mask] = []
 
-        enum CodingKeys: String, CodingKey { case owner, writers, req, rv, ub, wp, sm }
+        enum CodingKeys: String, CodingKey { case owner, writers, req, rv, ub, wp, sm, ra }
 
         init(owner: String, writers: [String] = [], req: [Req] = [], rv: [Req] = [],
-             ub: [Req] = [], wp: [Req] = [], sm: [Mask] = []) {
+             ub: [Req] = [], wp: [Req] = [], sm: [Mask] = [], ra: [Req] = []) {
             self.owner = owner
             self.writers = writers
             self.req = req
@@ -189,9 +192,10 @@ struct SyncSnapshot: Codable, Equatable {
             self.ub = ub
             self.wp = wp
             self.sm = sm
+            self.ra = ra
         }
 
-        /// 手写解码：rv/ub/wp/sm 都是后加的字段，旧快照里没有，必须能缺省
+        /// 手写解码：rv/ub/wp/sm/ra 都是后加的字段，旧快照里没有，必须能缺省
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             owner = try c.decodeIfPresent(String.self, forKey: .owner) ?? ""
@@ -201,11 +205,20 @@ struct SyncSnapshot: Codable, Equatable {
             ub = try c.decodeIfPresent([Req].self, forKey: .ub) ?? []
             wp = try c.decodeIfPresent([Req].self, forKey: .wp) ?? []
             sm = try c.decodeIfPresent([Mask].self, forKey: .sm) ?? []
+            ra = try c.decodeIfPresent([Req].self, forKey: .ra) ?? []
         }
 
-        /// 本机设备是否已被 owner 强制解绑
+        /// 本机设备是否已被 owner 强制解绑（准入记录比解绑记录晚 = 已获准重新加入）
         func unbound(deviceID: String) -> Bool {
-            ub.contains { $0.id == deviceID }
+            let ubT = ub.filter { $0.id == deviceID }.map(\.t).max() ?? 0
+            guard ubT > 0 else { return false }
+            let raT = ra.filter { $0.id == deviceID }.map(\.t).max() ?? 0
+            return ubT > raT
+        }
+        /// 设备是否被解绑过且尚未获准重新加入（用于 owner 端展示）
+        func unboundDevices() -> [String] {
+            let ubIds = Set(ub.map(\.id))
+            return ubIds.filter { unbound(deviceID: $0) }.sorted()
         }
         /// 指向本机的「清除数据」命令（有的话返回最新那条）
         func wipeCommand(deviceID: String) -> Req? {
@@ -331,11 +344,16 @@ enum SyncACLResolver {
         // v5.3 设备管理：强制解绑 / 清除命令 / 共享掩码（只增不减，规则两端一致）
         let ub = mergeReqs(local?.ub, remote?.ub)
         let wp = mergeReqs(local?.wp, remote?.wp)
+        let ra = mergeReqs(local?.ra, remote?.ra)
         let sm = mergeMasks(local?.sm, remote?.sm)
-        // 被解绑的设备不再算 writer（解绑记录压住 writers 并集）
-        let ubSet = Set(ub.map(\.id))
-        let finalWriters = writers.filter { !ubSet.contains($0) }.sorted()
-        return SyncSnapshot.ACL(owner: owner, writers: finalWriters, req: req, rv: rv, ub: ub, wp: wp, sm: sm)
+        // 被解绑的设备不再算 writer（解绑记录压住 writers 并集；
+        // v5.11 起准入记录更晚则视为已获准重新加入，不再压制）
+        let raMap = Dictionary(uniqueKeysWithValues: ra.map { ($0.id, $0.t) })
+        let stillUnbound = Set(ub.compactMap { q -> String? in
+            q.t > (raMap[q.id] ?? 0) ? q.id : nil
+        })
+        let finalWriters = writers.filter { !stillUnbound.contains($0) }.sorted()
+        return SyncSnapshot.ACL(owner: owner, writers: finalWriters, req: req, rv: rv, ub: ub, wp: wp, sm: sm, ra: ra)
     }
 }
 

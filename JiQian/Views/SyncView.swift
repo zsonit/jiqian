@@ -334,6 +334,11 @@ struct SyncView: View {
                 ForEach(sync.managedDevices, id: \.self) { dev in
                     deviceRow(dev)
                 }
+                // 被解绑的设备：给 owner 一个「允许重新加入」的出口，
+                // 否则误触一次解绑，那台手机就永远进不来这个配对码了
+                ForEach(sync.unboundDevices, id: \.self) { dev in
+                    unboundDeviceRow(dev)
+                }
             }
         }
     }
@@ -400,6 +405,37 @@ struct SyncView: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    /// 已解绑设备的行：展示 + 一键允许重新加入
+    private func unboundDeviceRow(_ dev: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Rectangle().fill(Pal.line).frame(height: 1)
+            HStack {
+                Text("设备 \(dev)")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Pal.ink3)
+                Text("已解绑")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Pal.danger)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Pal.danger.opacity(0.12)))
+                Spacer()
+            }
+            Button {
+                run { sync.allowRejoin(dev) }
+            } label: {
+                Text("允许重新加入")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Pal.brand)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(Pal.brand.opacity(0.55), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -481,7 +517,7 @@ struct SyncView: View {
 
     private var notesCard: some View {
         card {
-            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n* 对方申请编辑权限时，这台手机会弹通知，首页顶部也会出现「点此审批」横幅；点开即可同意或忽略\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动、宫缩、体重记录（含轮次、间隔、备注）与共享设置\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 设备管理（创建者专属）：可单独控制同步给某台手机的胎动 / 宫缩 / 设置 / 体重，也可强制解绑或清空对方的数据；被解绑的设备不能用原码再加入\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
+            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n* 对方申请编辑权限时，这台手机会弹通知，首页顶部也会出现「点此审批」横幅；点开即可同意或忽略\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动、宫缩、体重记录（含轮次、间隔、备注）与共享设置\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 设备管理（创建者专属）：可单独控制同步给某台手机的胎动 / 宫缩 / 设置 / 体重，也可强制解绑或清空对方的数据；被解绑的设备可在设备管理里点「允许重新加入」，然后用原码重新配对\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
                 .font(.system(size: 11))
                 .foregroundStyle(Pal.ink3)
                 .lineSpacing(3)

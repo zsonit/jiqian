@@ -146,17 +146,20 @@ fun SyncScreen(onClose: () -> Unit) {
             // v5.3 设备管理：只有创建配对码的手机可见（权限表变化时随 aclVersion 刷新）
             val manageVersion = SyncManager.aclVersion
             val devices = remember(manageVersion) { SyncManager.managedDevices() }
+            val unbound = remember(manageVersion) { SyncManager.unboundDevices() }
             val masks = remember(manageVersion) {
                 devices.associateWith { SyncManager.maskFor(it) }
             }
-            if (SyncManager.isOwner() && devices.isNotEmpty()) {
+            if (SyncManager.isOwner() && (devices.isNotEmpty() || unbound.isNotEmpty())) {
                 Spacer(Modifier.height(12.dp))
                 DeviceManageCard(
                     devices = devices,
                     masks = masks,
+                    unbound = unbound,
                     onSetMask = { id, k, c, s, w -> run { SyncManager.setShareMask(id, k, c, s, w) } },
                     onUnbind = { id -> run { SyncManager.forceUnbind(id) } },
                     onWipe = { id -> run { SyncManager.wipeDevice(id) } },
+                    onAllowRejoin = { id -> run { SyncManager.allowRejoin(id) } },
                 )
             }
 
@@ -206,7 +209,7 @@ fun SyncScreen(onClose: () -> Unit) {
                     "* 各自新增的记录都会保留；同一处改动，后改的生效\n" +
                     "* 「撤销上一次」「清空记录」也会同步到对端\n" +
                     "* 解除配对只会停止同步：本机与云端的记录都保留\n" +
-                    "* 设备管理（创建者专属）：可单独控制同步给某台手机的胎动 / 宫缩 / 设置，也可强制解绑或清空对方的数据；被解绑的设备不能用原码再加入\n" +
+                    "* 设备管理（创建者专属）：可单独控制同步给某台手机的胎动 / 宫缩 / 设置，也可强制解绑或清空对方的数据；被解绑的设备可在设备管理里点「允许重新加入」，然后用原码重新配对\n" +
                     "* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n" +
                     "* 配对码就是唯一的钥匙，请只告诉家人",
                 fontSize = 11.sp, color = Ink2, lineHeight = 16.sp, modifier = Modifier.padding(16.dp)
@@ -350,9 +353,11 @@ fun PermissionCard(
 fun DeviceManageCard(
     devices: List<String>,
     masks: Map<String, JSONObject?>,
+    unbound: List<String> = emptyList(),
     onSetMask: (String, Boolean, Boolean, Boolean, Boolean) -> Unit,
     onUnbind: (String) -> Unit,
     onWipe: (String) -> Unit,
+    onAllowRejoin: (String) -> Unit = {},
 ) {
     var confirmUnbind by remember { mutableStateOf<String?>(null) }
     var confirmWipe by remember { mutableStateOf<String?>(null) }
@@ -412,6 +417,40 @@ fun DeviceManageCard(
                         modifier = Modifier.weight(1f).height(40.dp)
                     ) { Text("清除数据", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = Color.White) }
                 }
+            }
+            // 被解绑的设备：给 owner 一个「允许重新加入」的出口，
+            // 否则误触一次解绑，那台手机就永远进不来这个配对码了
+            unbound.forEach { dev ->
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Ink.copy(alpha = 0.08f))
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("设备 $dev", fontSize = 13.sp, color = Ink2, modifier = Modifier.weight(1f))
+                    Text(
+                        "已解绑",
+                        fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                        color = Danger,
+                        modifier = Modifier
+                            .background(Danger.copy(alpha = 0.12f), RoundedCornerShape(50))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { onAllowRejoin(dev) },
+                    shape = RoundedCornerShape(50),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = Brand
+                    ),
+                    border = BorderStroke(1.dp, Brand.copy(alpha = 0.55f)),
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                ) { Text("允许重新加入", fontSize = 12.5.sp, fontWeight = FontWeight.Bold) }
             }
         }
     }
