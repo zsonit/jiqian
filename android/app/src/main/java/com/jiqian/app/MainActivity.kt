@@ -437,6 +437,8 @@ fun BottomBar(sel: Int, onPick: (Int) -> Unit) {
 fun KickScreen() {
     val ctx = LocalContext.current
     var tick by remember { mutableStateOf(0) }
+    // 查看模式下点了记录盘：弹窗说明 + 直接给申请入口（以前静默丢弃，用户以为「记上了只是没同步」）
+    var askEdit by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1000); tick++ } }
 
     val roundMin = Store.roundMin(ctx)
@@ -473,9 +475,14 @@ fun KickScreen() {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Surface(
                 modifier = Modifier.size(180.dp).clickable {
-                    Store.addKick(ctx)
-                    Feedback.click(ctx)
-                    tick++
+                    if (!SyncManager.canEdit) {
+                        // 查看模式：这次点击不会写进任何地方，必须当场说清楚
+                        askEdit = true
+                    } else {
+                        Store.addKick(ctx)
+                        Feedback.click(ctx)
+                        tick++
+                    }
                 },
                 shape = RoundedCornerShape(50),
                 color = Brand,
@@ -509,6 +516,22 @@ fun KickScreen() {
             Text(fmtFull(t), fontSize = 12.5.sp, color = Ink2, modifier = Modifier.padding(top = 6.dp))
         }
         if (roundKicks.isEmpty()) Text("本轮还没有记录", fontSize = 12.5.sp, color = Ink2, modifier = Modifier.padding(top = 6.dp))
+    }
+
+    if (askEdit) {
+        AlertDialog(
+            onDismissRequest = { askEdit = false },
+            title = { Text("当前是查看模式") },
+            text = { Text("这台手机现在只能查看同步过来的记录，点这里不会记下任何数据。申请后，在另一台手机上点「同意」即可记录。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    askEdit = false
+                    SyncManager.requestEditPermission()
+                    Toast.makeText(ctx, "已发出申请，请到另一台手机上同意", Toast.LENGTH_LONG).show()
+                }) { Text("申请编辑权限") }
+            },
+            dismissButton = { TextButton(onClick = { askEdit = false }) { Text("知道了") } }
+        )
     }
 }
 
@@ -908,7 +931,7 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
         }
 
         Spacer(Modifier.height(14.dp))
-        Text("胎动记录 v5.9 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v5.10 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = when (wipeKind) {

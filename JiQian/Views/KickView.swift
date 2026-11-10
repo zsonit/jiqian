@@ -10,6 +10,8 @@ struct KickView: View {
     @State private var showEndConfirm = false
     /// 撤销失败时的提示（查看模式 / 本轮没有记录）
     @State private var hint: String?
+    /// 查看模式下点了记录盘：弹窗说明并给出申请入口（以前是静默丢弃，用户以为「记上了但没同步」）
+    @State private var showReadOnlyAlert = false
 
     private var active: KickSession? {
         sessions.first(where: { $0.endedAt == nil })
@@ -40,6 +42,12 @@ struct KickView: View {
         }
         .navigationTitle("胎动")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("当前是查看模式", isPresented: $showReadOnlyAlert) {
+            Button("申请编辑权限") { _ = SyncManager.shared.requestEditPermission() }
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text("这台手机现在只能查看同步过来的记录，点这里不会记下任何数据。申请后，在另一台手机上点「同意」即可记录。")
+        }
         .overlay(alignment: .bottom) {
             if let hint {
                 Text(hint)
@@ -309,6 +317,13 @@ struct KickView: View {
     }
 
     private func record() {
+        // 查看模式：这次点击不会写进任何地方。以前是静默返回，用户会以为「记上了、只是没同步」，
+        // 于是把问题归到同步上。这里必须当场说清楚，并直接给出申请编辑权限的入口
+        guard SyncManager.shared.canEdit else {
+            Haptic.warning()
+            showReadOnlyAlert = true
+            return
+        }
         do {
             let outcome = try KickRecorder.record(source: .app)
             if outcome.duplicate {

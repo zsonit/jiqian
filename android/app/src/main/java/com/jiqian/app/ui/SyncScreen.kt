@@ -244,6 +244,10 @@ fun PermissionCard(
     onGrant: (String) -> Unit,
     onDeny: (String) -> Unit,
 ) {
+    // 撤销申请前先确认：误触一次这台手机就变只读，而且不会有人提醒
+    var showCancelConfirm by remember { mutableStateOf(false) }
+    // 「忽略」别人申请前也确认：对方会立刻变只读
+    var denyTarget by remember { mutableStateOf<String?>(null) }
     Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
         Column(Modifier.padding(16.dp)) {
             if (canEdit) {
@@ -275,7 +279,7 @@ fun PermissionCard(
                                 colors = ButtonDefaults.buttonColors(containerColor = Brand),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                             ) { Text("同意", fontSize = 12.5.sp, color = Color.White) }
-                            TextButton(onClick = { onDeny(id) }) { Text("忽略", fontSize = 12.5.sp, color = Ink2) }
+                            TextButton(onClick = { denyTarget = id }) { Text("忽略", fontSize = 12.5.sp, color = Ink2) }
                         }
                     }
                 }
@@ -288,9 +292,13 @@ fun PermissionCard(
                 Spacer(Modifier.height(10.dp))
                 if (hasRequested) {
                     TextButton(
-                        onClick = onCancelRequest,
+                        onClick = { showCancelConfirm = true },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("已申请，等待对方同意 · 点按撤销申请", fontSize = 12.5.sp, color = Brand) }
+                    ) { Text("已申请，等待对方同意", fontSize = 12.5.sp, color = Brand) }
+                    TextButton(
+                        onClick = { showCancelConfirm = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("撤销申请", fontSize = 11.5.sp, color = Ink2) }
                 } else {
                     Button(
                         onClick = onRequest,
@@ -301,6 +309,36 @@ fun PermissionCard(
                 }
             }
         }
+    }
+
+    if (showCancelConfirm) {
+        AlertDialog(
+            onDismissRequest = { showCancelConfirm = false },
+            title = { Text("撤销编辑权限申请？") },
+            text = { Text("撤销后这台手机会变成「查看模式」：不能记录胎动/宫缩/体重，直到你在另一端重新同意。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCancelConfirm = false
+                    onCancelRequest()
+                }) { Text("撤销申请", color = Color(0xFFC0392B)) }
+            },
+            dismissButton = { TextButton(onClick = { showCancelConfirm = false }) { Text("取消") } }
+        )
+    }
+
+    denyTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { denyTarget = null },
+            title = { Text("忽略设备 $target 的申请？") },
+            text = { Text("对方会保持「查看模式」，无法记录胎动；对方之后仍可再次申请。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    denyTarget = null
+                    onDeny(target)
+                }) { Text("忽略申请", color = Color(0xFFC0392B)) }
+            },
+            dismissButton = { TextButton(onClick = { denyTarget = null }) { Text("取消") } }
+        )
     }
 }
 

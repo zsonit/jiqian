@@ -15,6 +15,10 @@ struct SyncView: View {
     /// 设备管理：待确认的动作目标（强制解绑 / 清除数据）
     @State private var unbindTarget: String?
     @State private var wipeTarget: String?
+    /// 撤销编辑权限申请前先确认：误触一次这台手机就变只读，而且不会有人提醒
+    @State private var confirmCancelRequest = false
+    /// 「忽略」别人申请前也确认：对方会立刻变只读
+    @State private var denyTarget: String?
 
     private var code: String? { sync.pairedCode }
 
@@ -59,6 +63,29 @@ struct SyncView: View {
             Button("取消", role: .cancel) { wipeTarget = nil }
         } message: {
             Text("对方手机联网后会清空全部胎动与宫缩记录并自动解除配对；本机与云端的记录不受影响。")
+        }
+        .confirmationDialog("撤销编辑权限申请？",
+                            isPresented: $confirmCancelRequest,
+                            titleVisibility: .visible) {
+            Button("撤销申请", role: .destructive) {
+                confirmCancelRequest = false
+                run { sync.cancelEditPermission() }
+            }
+            Button("取消", role: .cancel) { confirmCancelRequest = false }
+        } message: {
+            Text("撤销后这台手机会变成「查看模式」：不能记录胎动/宫缩/体重，直到你在另一端重新同意。")
+        }
+        .confirmationDialog("忽略设备 \(denyTarget ?? "") 的申请？",
+                            isPresented: Binding(get: { denyTarget != nil },
+                                                 set: { if !$0 { denyTarget = nil } }),
+                            titleVisibility: .visible) {
+            Button("忽略申请", role: .destructive) {
+                if let d = denyTarget { run { sync.denyRequest(d) } }
+                denyTarget = nil
+            }
+            Button("取消", role: .cancel) { denyTarget = nil }
+        } message: {
+            Text("对方会保持「查看模式」，无法记录胎动；对方之后仍可再次申请。")
         }
         .overlay(alignment: .bottom) {
             if let toast {
@@ -198,14 +225,22 @@ struct SyncView: View {
                         .lineSpacing(3)
                     if hasRequested {
                         Button {
-                            run { sync.cancelEditPermission() }
+                            confirmCancelRequest = true
                         } label: {
-                            Text("已申请，等待对方同意 · 点按撤销申请")
+                            Text("已申请，等待对方同意")
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .foregroundStyle(Pal.brand)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
                                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Pal.brandSoft))
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            confirmCancelRequest = true
+                        } label: {
+                            Text("撤销申请")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Pal.ink3)
                         }
                         .buttonStyle(.plain)
                     } else {
@@ -258,7 +293,7 @@ struct SyncView: View {
                         }
                         .buttonStyle(.plain)
                         Button {
-                            run { sync.denyRequest(req.id) }
+                            denyTarget = req.id
                         } label: {
                             Text("忽略")
                                 .font(.system(size: 12.5))
