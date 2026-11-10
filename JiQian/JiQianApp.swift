@@ -15,6 +15,7 @@ struct JiQianApp: App {
             case .active:
                 // 回到前台：立即同步一次并开启自动检查
                 AppLog.i("App", "进入前台")
+                BackupManager.autoIfNeeded()
                 SyncManager.shared.appDidBecomeActive()
             case .background:
                 // 退到后台：停轮询，抢推未上传的改动

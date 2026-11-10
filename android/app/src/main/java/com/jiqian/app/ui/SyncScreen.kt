@@ -202,8 +202,8 @@ fun SyncScreen(onClose: () -> Unit) {
         Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
             Text(
                 "* 一个配对码可以加到多部手机，大家看到的是同一份记录\n" +
-                    "* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n" +
-                    "* 对方申请编辑权限时，这台手机会弹通知，页面顶部也会出现「点此审批」横幅\n" +
+                    "* 权限：创建配对码的手机可编辑；加入的手机是「查看模式」：实时镜像创建者的数据，本机的任何数据都不会同步到对方\n" +
+                    "* 想换谁当记录端：在创建者手机上解除配对，再用想记录的那台手机创建配对码\n" +
                     "* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n" +
                     "* 同步内容：胎动、宫缩、体重记录（含轮次、间隔、备注）与共享设置\n" +
                     "* 各自新增的记录都会保留；同一处改动，后改的生效\n" +
@@ -235,7 +235,7 @@ private fun lastSyncText(at: Long): String {
     return SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(at))
 }
 
-// ---------- 权限卡片：创建者可写；加入者默认只读，可申请编辑权限 ----------
+// ---------- 权限卡片：创建者可写；加入者 = 单向镜像查看端，只接收不发送 ----------
 
 @Composable
 fun PermissionCard(
@@ -247,9 +247,7 @@ fun PermissionCard(
     onGrant: (String) -> Unit,
     onDeny: (String) -> Unit,
 ) {
-    // 撤销申请前先确认：误触一次这台手机就变只读，而且不会有人提醒
-    var showCancelConfirm by remember { mutableStateOf(false) }
-    // 「忽略」别人申请前也确认：对方会立刻变只读
+        // 「忽略」别人申请前也确认：对方会立刻变只读
     var denyTarget by remember { mutableStateOf<String?>(null) }
     Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
         Column(Modifier.padding(16.dp)) {
@@ -289,45 +287,13 @@ fun PermissionCard(
             } else {
                 Text("查看模式", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
                 Text(
-                    "只能查看同步过来的记录，无法修改对方的数据。想修改请申请编辑权限，对方同意后即可记录。",
+                    "这台手机实时镜像创建者的数据；本机的任何数据都不会同步到对方，对方也不会接受本机数据。",
                     fontSize = 12.sp, color = Ink2, lineHeight = 17.sp, modifier = Modifier.padding(top = 4.dp)
                 )
-                Spacer(Modifier.height(10.dp))
-                if (hasRequested) {
-                    TextButton(
-                        onClick = { showCancelConfirm = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("已申请，等待对方同意", fontSize = 12.5.sp, color = Brand) }
-                    TextButton(
-                        onClick = { showCancelConfirm = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("撤销申请", fontSize = 11.5.sp, color = Ink2) }
-                } else {
-                    Button(
-                        onClick = onRequest,
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
-                        shape = RoundedCornerShape(50),
-                        colors = ButtonDefaults.buttonColors(containerColor = Brand)
-                    ) { Text("申请编辑权限", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White) }
-                }
             }
         }
     }
 
-    if (showCancelConfirm) {
-        AlertDialog(
-            onDismissRequest = { showCancelConfirm = false },
-            title = { Text("撤销编辑权限申请？") },
-            text = { Text("撤销后这台手机会变成「查看模式」：不能记录胎动/宫缩/体重，直到你在另一端重新同意。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showCancelConfirm = false
-                    onCancelRequest()
-                }) { Text("撤销申请", color = Color(0xFFC0392B)) }
-            },
-            dismissButton = { TextButton(onClick = { showCancelConfirm = false }) { Text("取消") } }
-        )
-    }
 
     denyTarget?.let { target ->
         AlertDialog(

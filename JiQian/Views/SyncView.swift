@@ -16,7 +16,6 @@ struct SyncView: View {
     @State private var unbindTarget: String?
     @State private var wipeTarget: String?
     /// 撤销编辑权限申请前先确认：误触一次这台手机就变只读，而且不会有人提醒
-    @State private var confirmCancelRequest = false
     /// 「忽略」别人申请前也确认：对方会立刻变只读
     @State private var denyTarget: String?
 
@@ -63,17 +62,6 @@ struct SyncView: View {
             Button("取消", role: .cancel) { wipeTarget = nil }
         } message: {
             Text("对方手机联网后会清空全部胎动与宫缩记录并自动解除配对；本机与云端的记录不受影响。")
-        }
-        .confirmationDialog("撤销编辑权限申请？",
-                            isPresented: $confirmCancelRequest,
-                            titleVisibility: .visible) {
-            Button("撤销申请", role: .destructive) {
-                confirmCancelRequest = false
-                run { sync.cancelEditPermission() }
-            }
-            Button("取消", role: .cancel) { confirmCancelRequest = false }
-        } message: {
-            Text("撤销后这台手机会变成「查看模式」：不能记录胎动/宫缩/体重，直到你在另一端重新同意。")
         }
         .confirmationDialog("忽略设备 \(denyTarget ?? "") 的申请？",
                             isPresented: Binding(get: { denyTarget != nil },
@@ -189,7 +177,7 @@ struct SyncView: View {
         }
     }
 
-    // MARK: 权限卡片（创建者可写；加入者默认只读，可申请编辑权限）
+    // MARK: 权限卡片（创建者可写；加入者 = 单向镜像查看端，只接收不发送）
 
     private var permissionCard: some View {
         card {
@@ -219,43 +207,10 @@ struct SyncView: View {
                             .foregroundStyle(Pal.ink)
                         Spacer()
                     }
-                    Text("只能查看同步过来的记录，无法修改对方的数据。想修改请在下面申请编辑权限，对方同意后即可记录。")
+                    Text("查看模式：这台手机实时镜像创建者的数据；本机的任何数据都不会同步到对方，对方也不会接受本机数据。")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Pal.ink3)
                         .lineSpacing(3)
-                    if hasRequested {
-                        Button {
-                            confirmCancelRequest = true
-                        } label: {
-                            Text("已申请，等待对方同意")
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(Pal.brand)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Pal.brandSoft))
-                        }
-                        .buttonStyle(.plain)
-                        Button {
-                            confirmCancelRequest = true
-                        } label: {
-                            Text("撤销申请")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Pal.ink3)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Button {
-                            run { sync.requestEditPermission() }
-                        } label: {
-                            Text("申请编辑权限")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Pal.brand))
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
             }
         }
@@ -517,7 +472,7 @@ struct SyncView: View {
 
     private var notesCard: some View {
         card {
-            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 权限：创建配对码的手机可编辑；加入的手机默认只能查看，点「申请编辑权限」并等对方同意后才能记录\n* 对方申请编辑权限时，这台手机会弹通知，首页顶部也会出现「点此审批」横幅；点开即可同意或忽略\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动、宫缩、体重记录（含轮次、间隔、备注）与共享设置\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 设备管理（创建者专属）：可单独控制同步给某台手机的胎动 / 宫缩 / 设置 / 体重，也可强制解绑或清空对方的数据；被解绑的设备可在设备管理里点「允许重新加入」，然后用原码重新配对\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
+            Text("* 一个配对码可以加到多部手机，大家看到的是同一份记录\n* 权限：创建配对码的手机可编辑；加入的手机是「查看模式」：实时镜像创建者的数据，本机的任何数据都不会同步到对方\n* 想换谁当记录端：在创建者手机上解除配对，再用想记录的那台手机创建配对码\n* 一台手机记了数据：约 2 秒内自动上传；其他手机开着 App 时约 6 秒内自动拉取，切回 App 会立刻同步\n* 同步内容：胎动、宫缩、体重记录（含轮次、间隔、备注）与共享设置\n* 各自新增的记录都会保留；同一处改动，后改的生效\n* 「撤销上一次」也会同步：对端同一条会被删掉\n* 「清空全部记录」也会同步：所有设备上的对应记录一起清空\n* 解除配对只会停止同步：本机与云端的记录都保留\n* 设备管理（创建者专属）：可单独控制同步给某台手机的胎动 / 宫缩 / 设置 / 体重，也可强制解绑或清空对方的数据；被解绑的设备可在设备管理里点「允许重新加入」，然后用原码重新配对\n* 端到端加密：记录在手机上用配对码加密后才上传，云端只存密文，服务器也读不到内容\n* 配对码就是唯一的钥匙，请只告诉家人")
                 .font(.system(size: 11))
                 .foregroundStyle(Pal.ink3)
                 .lineSpacing(3)

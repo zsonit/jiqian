@@ -21,6 +21,11 @@ struct SettingsView: View {
 
     @State private var showWipeConfirm = false
     @State private var showWipeConfirm2 = false
+    // v5.13 备份与恢复
+    @State private var backupMsg: String = ""
+    @State private var showBackupMsg = false
+    @State private var showRestoreBackupConfirm = false
+    @State private var showRestoreCloudConfirm = false
     /// 运行日志独立开关（排查用）：默认关，不参与配对同步
     @AppStorage(AppLog.enabledKey) private var diagLogOn: Bool = false
 
@@ -239,6 +244,45 @@ struct SettingsView: View {
                          : "查看模式下没有清空入口；需要清空请在可编辑的那台手机上操作（会同步删除所有配对设备的记录）。")
                 }
 
+                if sync.canEdit {
+                    Section {
+                        HStack {
+                            Text("上次备份")
+                            Spacer()
+                            Text(backupTimeText).foregroundStyle(Pal.ink2)
+                        }
+                        Button {
+                            backupMsg = BackupManager.backupNow()
+                            showBackupMsg = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "square.and.arrow.down").foregroundStyle(Pal.brand)
+                                Text("立即备份")
+                            }
+                        }
+                        Button(role: .destructive) {
+                            showRestoreBackupConfirm = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "clock.arrow.circlepath").foregroundStyle(Pal.brand)
+                                Text("从备份恢复")
+                            }
+                        }
+                        Button(role: .destructive) {
+                            showRestoreCloudConfirm = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "icloud.and.arrow.down").foregroundStyle(Pal.brand)
+                                Text("从云端恢复")
+                            }
+                        }
+                    } header: {
+                        Text("备份与恢复")
+                    } footer: {
+                        Text("每天自动备份 3 次（8 小时一次），只保留最新一份。误清空/误删后可一键恢复：恢复会用备份或云端的数据整体重置本机记录，可写端还会把恢复的数据推回云端。")
+                    }
+                }
+
                 Section {
                     Toggle("运行日志（排查用）", isOn: $diagLogOn)
                         .onChange(of: diagLogOn) { _, on in
@@ -287,7 +331,37 @@ struct SettingsView: View {
             } message: {
                 Text("将删除胎动 \(kickEvents.count) 条、宫缩 \(contractions.filter { $0.endedAt != nil }.count) 次、体重 \(weightEntries.count) 条，包括轮次和间隔信息，删除后无法找回。")
             }
+            .confirmationDialog("从备份恢复？", isPresented: $showRestoreBackupConfirm, titleVisibility: .visible) {
+                Button("恢复", role: .destructive) {
+                    backupMsg = BackupManager.restoreFromBackup()
+                    showBackupMsg = true
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("本机当前记录会被整体替换为备份时的数据（胎动/宫缩/体重全部以备份为准），可写端会把恢复的数据推回云端。")
+            }
+            .confirmationDialog("从云端恢复？", isPresented: $showRestoreCloudConfirm, titleVisibility: .visible) {
+                Button("恢复", role: .destructive) {
+                    backupMsg = sync.restoreFromCloud()
+                    showBackupMsg = true
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("本机当前记录会被整体替换为云端当前的数据。适合误触「清空全部记录」后把数据救回来。")
+            }
+            .alert("备份与恢复", isPresented: $showBackupMsg) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(backupMsg)
+            }
         }
+    }
+
+    private var backupTimeText: String {
+        guard let d = BackupManager.lastBackupAt() else { return "还没有备份" }
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd HH:mm"
+        return f.string(from: d)
     }
 
     private var appVersion: String {

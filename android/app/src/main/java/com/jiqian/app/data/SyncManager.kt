@@ -71,6 +71,8 @@ object SyncManager {
 
     /** 本机有未推送的修改；没有就不推，避免两端互推蹭出无限循环 */
     @Volatile private var localDirty = false
+    /** v5.13 恢复推送标记：刚从备份/云端恢复过 → 下一次同步跳过合并直接把本机完整数据推上云端 */
+    @Volatile private var pendingRestorePush = false
     /** 同步进行中又来了新改动：等这一轮结束后必须补跑一次，否则这次改动会被丢掉 */
     @Volatile private var retryPending = false
     private var lastRev: Long = 0L
@@ -949,6 +951,47 @@ object SyncManager {
         return SyncResult(true, "已解除配对：本机与云端的记录都保留，只是不再同步")
     }
 
+    // MARK: v5.13 备份与恢复
+
+    /** 导出当前全部记录的快照 JSON（备份用） */
+    fun exportSnapshotJSON(): String? = try {
+        localSnapshot().toString()
+    } catch (e: Exception) {
+        AppLog.e("备份导出失败：$e")
+        null
+    }
+
+    /** 用给定快照整体重置本机记录（恢复自备份文件或云端）。
+     *  无视快照里的清空标记与墓碑；恢复后清掉本机的清空标记/墓碑，
+     *  可写端会自动把恢复的数据推回云端（pendingRestorePush）。 */
+    fun restoreRecords(snap0: JSONObject): String {
+        val snap = JSONObject(snap0.toString())
+        snap.put("cl", 0L)
+        snap.put("del", JSONArray())
+        val ctx = appContext ?: return "恢复失败：应用未就绪"
+        return try {
+            applySnapshot(snap)
+            prefs()?.edit()?.putLong(KEY_CL, 0L)?.putString(KEY_DEL, "[]")?.apply()
+            localDirty = false
+            pendingRestorePush = true
+            syncNow(manual = true)
+            "恢复完成：胎动 ${snap.optJSONArray("ke")?.length() ?: 0} 条 / 宫缩 ${snap.optJSONArray("ce")?.length() ?: 0} 次 / 体重 ${snap.optJSONArray("we")?.length() ?: 0} 条"
+        } catch (e: Exception) {
+            AppLog.e("恢复失败：$e")
+            "恢复失败：${e.message}"
+        }
+    }
+
+    /** 从云端恢复：把本机记录整体重置为云端当前的数据（无视本机清空标记） */
+    fun restoreFromCloud(): String {
+        val code = pairedCode ?: return "尚未配对，无法从云端恢复"
+        val remote = fetchRemote(code) ?: return "云端拉取失败：网络不可用"
+        if (remote.updatedBy == UNDECRYPTABLE) return "云端数据无法解密，请重新输入配对码"
+        if (remote.updatedBy == EMPTY) return "云端还没有数据，无法恢复"
+        setRev(remote.rev)
+        return restoreRecords(remote.state)
+    }
+
     // MARK: 触发（Store 每次落库后调用）
 
     fun onDataChanged() {
@@ -1470,6 +1513,28 @@ object SyncManager {
                     AppLog.i("本机清空标记未同步过，按无效清空丢弃（云端 cl=$remoteCl）")
                 }
             }
+            // v5.13 恢复推送：刚从备份/云端恢复过 → 跳过合并直接把本机完整快照推上云端；
+            // 只读端没有推送权限，照常走镜像拉取
+            if (pendingRestorePush) {
+                pendingRestorePush = false
+                if (computeCanEdit()) {
+                    val fresh = localSnapshot()
+                    storedAcl()?.let { fresh.put("acl", it) }
+                        ?: remote?.state?.optJSONObject("acl")?.let { fresh.put("acl", it) }
+                    val resp = upsert(code, fresh)
+                    if (!resp.ok) {
+                        pendingRestorePush = true
+                        lastMessage = if (manual) "恢复数据推送失败：${resp.message}" else null
+                        return SyncResult(false, "恢复数据推送失败：${resp.message}")
+                    }
+                    localDirty = false
+                    setAclDirty(false)
+                    markSynced()
+                    lastMessage = "恢复的数据已推送到云端"
+                    AppLog.i("同步完成：$lastMessage（胎动 ${fresh.optJSONArray("ke")?.length() ?: 0} 条）")
+                    return SyncResult(true, lastMessage!!)
+                }
+            }
             // 这一轮真的从对方落到新数据了（只读端也能拉到，所以单独立标记）
             var appliedFromRemote = false
             // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
@@ -1488,7 +1553,9 @@ object SyncManager {
                 // 本机每次重建快照都会丢掉它们 —— 直接比较会永远不相等，
                 // 表现就是每轮假报「已应用对方数据」+ 假推送（rev 被凭空顶高，对端跟着空转）
                 if (significant(merged) != significant(local)) {
-                    applySnapshot(merged)
+                    // v5.13 单向镜像：查看端（只读）直接以云端数据为准——本机多出来的记录会被
+                    // 丢弃，本机的任何数据都不会汇入云端；可写端仍是双向并集
+                    applySnapshot(if (localCanEdit) merged else remote.state)
                     appliedFromRemote = true
                     AppLog.i("已应用对方数据：${diffSummary(local, merged)}")
                     mustPush = true

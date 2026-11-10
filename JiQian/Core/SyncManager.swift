@@ -62,6 +62,9 @@ final class SyncManager: ObservableObject {
 
     /// 本机有未推送的修改；没有就不推，避免两端互推蹭出无限循环
     private var localDirty = false
+    /// v5.13 恢复推送标记：刚从备份/云端恢复过 → 下一次同步跳过合并直接把本机完整数据推上云端
+    /// （合并会把「清空标记早于记录」的数据滤空，刚恢复的数据会被误删，必须绕过）
+    private var pendingRestorePush = false
     /// 同步进行中又来了新改动：等这一轮结束后必须补跑一次，否则这次改动会被丢掉
     private var retryPending = false
     private let syncLock = NSLock()
@@ -498,6 +501,52 @@ final class SyncManager: ObservableObject {
         AppLog.i("Sync", "管理员清除：本机全部记录已删除")
     }
 
+    // MARK: - v5.13 备份与恢复
+
+    /// 恢复前置：清空本机全部记录（不动配对状态、权限表与共享设置）
+    static func wipeRecordsForRestore() throws {
+        let ctx = ModelContext(JiQianStore.container)
+        ctx.autosaveEnabled = false
+        for event in try ctx.fetch(FetchDescriptor<KickEvent>()) { ctx.delete(event) }
+        for session in try ctx.fetch(FetchDescriptor<KickSession>()) { ctx.delete(session) }
+        for session in try ctx.fetch(FetchDescriptor<ContractionSession>()) { ctx.delete(session) }
+        for event in try ctx.fetch(FetchDescriptor<ContractionEvent>()) { ctx.delete(event) }
+        for entry in try ctx.fetch(FetchDescriptor<WeightEntry>()) { ctx.delete(entry) }
+        try ctx.save()
+    }
+
+    /// 用给定快照整体重置本机记录（恢复自备份文件或云端）。
+    /// 无视快照里的清空标记与墓碑（恢复 = 数据全都要）；同时清掉本机的清空标记/墓碑，
+    /// 否则后续导出与合并会把刚恢复的数据滤空。可写端会自动把恢复的数据推回云端。
+    func restoreRecords(from snap0: SyncSnapshot) -> String {
+        var snap = snap0
+        snap.cl = 0
+        snap.del = []
+        do {
+            try Self.wipeRecordsForRestore()
+            try SnapshotIO.apply(snap, to: ModelContext(JiQianStore.container))
+        } catch {
+            AppLog.e("Backup", "恢复失败：\(error)")
+            return "恢复失败：\(error.localizedDescription)"
+        }
+        Self.defaults.removeObject(forKey: Self.keyClearedAt)
+        Self.defaults.removeObject(forKey: Self.keyTombstones)
+        localDirty = false
+        pendingRestorePush = true
+        DispatchQueue.global(qos: .utility).async { _ = self.syncNow(manual: true) }
+        return "恢复完成：胎动 \(snap.ke.count) 条 / 宫缩 \(snap.ce.count) 次 / 体重 \((snap.we ?? []).count) 条"
+    }
+
+    /// 从云端恢复：把本机记录整体重置为云端当前的数据（无视本机清空标记）
+    func restoreFromCloud() -> String {
+        guard let code = pairedCode else { return "尚未配对，无法从云端恢复" }
+        guard let remote = fetchRemote(code: code) else { return "云端拉取失败：网络不可用" }
+        if remote.updatedBy == Self.undecryptable { return "云端数据无法解密，请重新输入配对码" }
+        if remote.updatedBy == Self.empty { return "云端还没有数据，无法恢复" }
+        setRev(remote.rev)
+        return restoreRecords(from: remote.state)
+    }
+
     /// 检查云端权限表里有没有指向本机的管理动作（清除数据 / 强制解绑）。
     /// 返回 nil = 没有动作，继续正常同步；有动作则已就地处理（清库 / 解绑 + 通知），
     /// 调用方直接返回、绝不推送 —— 防止把本机（可能已清空的）数据盖回云端。
@@ -752,6 +801,38 @@ final class SyncManager: ObservableObject {
             local.cl = snapshot.state.cl
             AppLog.i("Sync", "本机清空标记未同步过，按无效清空丢弃（云端 cl=\(snapshot.state.cl)）")
         }
+        // v5.13 恢复推送：刚从备份/云端恢复过 → 跳过合并直接把本机完整快照推上云端；
+        // 只读端没有推送权限，照常走镜像拉取
+        if pendingRestorePush {
+            pendingRestorePush = false
+            if computeCanEdit() {
+                do {
+                    var fresh = try SnapshotIO.export(from: ctx)
+                    fresh.acl = SyncACLResolver.merge(local: local.acl,
+                                                      remote: snapshot.state.acl,
+                                                      pendingOwner: pendingOwnerAcl ? deviceId : nil)
+                    guard let status = upsert(code: code, snapshot: fresh) else {
+                        pendingRestorePush = true
+                        return SyncOutcome(ok: false, message: manual ? "恢复数据推送失败：网络不可用" : "")
+                    }
+                    guard (200...299).contains(status) else {
+                        pendingRestorePush = true
+                        AppLog.w("Sync", "恢复数据推送失败：HTTP \(status)，稍后重试")
+                        return SyncOutcome(ok: false, message: "恢复数据推送失败：HTTP \(status)")
+                    }
+                    localDirty = false
+                    Self.defaults.set(false, forKey: Self.keyACLDirty)
+                    markSynced()
+                    DispatchQueue.main.async { self.lastMessage = "恢复的数据已推送到云端" }
+                    AppLog.i("Sync", "恢复推送完成：胎动 \(fresh.ke.count) 条")
+                    return SyncOutcome(ok: true, message: "恢复的数据已推送到云端")
+                } catch {
+                    pendingRestorePush = true
+                    AppLog.e("Sync", "恢复导出失败：\(error)")
+                    return SyncOutcome(ok: false, message: "恢复推送失败")
+                }
+            }
+        }
         // 这一轮真的从对方落到新数据了（只读端也能拉到，所以单独立标记）
         var appliedFromRemote = false
         // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
@@ -770,9 +851,12 @@ final class SyncManager: ObservableObject {
         // 不能只比较「合并结果 vs 本机旧值」，撤销时合并结果可能正好等于本机旧值，
         // 那样这一轮就不会推送，对方永远看不到撤销
         if isAclDirty() && merged.acl != snapshot.state.acl { mustPush = true }
-        if merged != local {
-            do {
-                try SnapshotIO.apply(merged, to: ctx, maskedFor: deviceId)
+            if merged != local {
+                do {
+                    // v5.13 单向镜像：查看端（只读）直接以云端数据为准——本机多出来的记录会被
+                    // 丢弃，本机的任何数据都不会汇入合并结果、更不会推上云端；可写端仍是双向并集
+                    try SnapshotIO.apply(computeCanEdit() ? merged : snapshot.state,
+                                         to: ctx, maskedFor: deviceId)
                 appliedFromRemote = true
                 AppLog.i("Sync", "已应用对方数据：\(diffSummary(from: local, to: merged))")
             } catch {

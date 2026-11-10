@@ -339,6 +339,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         AppLog.i("App 进入前台")
+        BackupManager.autoIfNeeded(this)
         SyncManager.onForeground()
     }
 
@@ -367,7 +368,7 @@ fun App() {
                 // 查看模式横幅：配对后未获授权的手机只能看，改不了数据
                 if (SyncManager.pairedCode != null && !SyncManager.canEdit) {
                     Text(
-                        "👁 查看模式 · 修改数据需在「设置 → 配对同步」申请权限",
+                        "👁 查看模式 · 实时镜像创建者的数据，本机数据不会同步过去",
                         fontSize = 11.sp, color = Ink2,
                         modifier = Modifier.fillMaxWidth().background(BrandSoft).padding(horizontal = 16.dp, vertical = 6.dp)
                     )
@@ -499,7 +500,7 @@ fun KickScreen() {
             TextButton(onClick = {
                 // 以前点了没反应（查看模式被拦截时静默返回）：这里明确告诉用户为什么
                 if (!SyncManager.canEdit) {
-                    Toast.makeText(ctx, "查看模式不能改记录，去「设置 → 配对同步」申请权限", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(ctx, "查看模式：本机数据不会同步，记录请用创建配对码的那台手机", Toast.LENGTH_SHORT).show()
                 } else if (Store.kicks(ctx).isEmpty()) {
                     Toast.makeText(ctx, "还没有可以撤销的记录", Toast.LENGTH_SHORT).show()
                 } else {
@@ -522,15 +523,10 @@ fun KickScreen() {
         AlertDialog(
             onDismissRequest = { askEdit = false },
             title = { Text("当前是查看模式") },
-            text = { Text("这台手机现在只能查看同步过来的记录，点这里不会记下任何数据。申请后，在另一台手机上点「同意」即可记录。") },
+            text = { Text("这台手机实时镜像创建者的数据；本机的任何数据都不会同步到对方。想记录请换到创建配对码的那台手机操作。") },
             confirmButton = {
-                TextButton(onClick = {
-                    askEdit = false
-                    SyncManager.requestEditPermission()
-                    Toast.makeText(ctx, "已发出申请，请到另一台手机上同意", Toast.LENGTH_LONG).show()
-                }) { Text("申请编辑权限") }
-            },
-            dismissButton = { TextButton(onClick = { askEdit = false }) { Text("知道了") } }
+                TextButton(onClick = { askEdit = false }) { Text("知道了") }
+            }
         )
     }
 }
@@ -731,6 +727,11 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
     // 清空记录的两道确认：1=第一次提醒，2=最后确认
     var confirmStep by remember { mutableStateOf(0) }
     var wipeKind by remember { mutableStateOf("kicks") }
+    // v5.13 备份与恢复
+    var backupMsg by remember { mutableStateOf("") }
+    var showBackupMsg by remember { mutableStateOf(false) }
+    var showRestoreBackupConfirm by remember { mutableStateOf(false) }
+    var showRestoreCloudConfirm by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("设置", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
@@ -902,6 +903,41 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
         }
 
         Spacer(Modifier.height(20.dp))
+
+        // v5.13 备份与恢复：每天自动备份 3 次（8 小时一次），只保留最新一份；误清空/误删后一键恢复
+        if (SyncManager.canEdit) {
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                Column(Modifier.padding(16.dp)) {
+                    val lastBk = BackupManager.lastBackupAt(ctx)
+                    Text("备份与恢复", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink)
+                    Text(
+                        if (lastBk > 0L)
+                            "上次备份：" + SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(lastBk)) + " · 每天自动 3 次，只留最新一份"
+                        else "还没有备份 · 每天自动备份 3 次（8 小时一次），只保留最新一份",
+                        fontSize = 11.sp, color = Ink2, lineHeight = 15.sp, modifier = Modifier.padding(top = 2.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                backupMsg = BackupManager.backupNow(ctx)
+                                showBackupMsg = true
+                            },
+                            shape = RoundedCornerShape(50)
+                        ) { Text("立即备份") }
+                        OutlinedButton(
+                            onClick = { showRestoreBackupConfirm = true },
+                            shape = RoundedCornerShape(50)
+                        ) { Text("从备份恢复", color = Danger) }
+                        OutlinedButton(
+                            onClick = { showRestoreCloudConfirm = true },
+                            shape = RoundedCornerShape(50)
+                        ) { Text("从云端恢复", color = Danger) }
+                    }
+                }
+            }
+        }
+
         Spacer(Modifier.height(14.dp))
         // 运行日志（排查用）：独立开关，默认关；打开后可进入日志页查看
         var logOn by remember { mutableStateOf(AppLog.enabled(ctx)) }
@@ -931,7 +967,61 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
         }
 
         Spacer(Modifier.height(14.dp))
-        Text("胎动记录 v5.12 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v5.13 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+
+        // v5.13 备份/恢复的确认与结果弹窗（恢复走后台线程，网络请求不能在主线程）
+        if (showRestoreBackupConfirm) {
+            AlertDialog(
+                onDismissRequest = { showRestoreBackupConfirm = false },
+                title = { Text("从备份恢复？") },
+                text = { Text("本机当前记录会被整体替换为备份时的数据（胎动/宫缩/体重全部以备份为准），恢复后会自动推送到云端。") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showRestoreBackupConfirm = false
+                        backupMsg = "恢复中…"
+                        showBackupMsg = true
+                        kotlin.concurrent.thread {
+                            val msg = BackupManager.restoreFromBackup(ctx)
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                backupMsg = msg
+                                showBackupMsg = true
+                            }
+                        }
+                    }) { Text("恢复", color = Danger) }
+                },
+                dismissButton = { TextButton(onClick = { showRestoreBackupConfirm = false }) { Text("取消", color = Ink2) } }
+            )
+        }
+        if (showRestoreCloudConfirm) {
+            AlertDialog(
+                onDismissRequest = { showRestoreCloudConfirm = false },
+                title = { Text("从云端恢复？") },
+                text = { Text("本机当前记录会被整体替换为云端当前的数据。适合误触「清空全部记录」后把数据救回来。") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showRestoreCloudConfirm = false
+                        backupMsg = "恢复中…"
+                        showBackupMsg = true
+                        kotlin.concurrent.thread {
+                            val msg = SyncManager.restoreFromCloud()
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                backupMsg = msg
+                                showBackupMsg = true
+                            }
+                        }
+                    }) { Text("恢复", color = Danger) }
+                },
+                dismissButton = { TextButton(onClick = { showRestoreCloudConfirm = false }) { Text("取消", color = Ink2) } }
+            )
+        }
+        if (showBackupMsg) {
+            AlertDialog(
+                onDismissRequest = { showBackupMsg = false },
+                title = { Text("备份与恢复") },
+                text = { Text(backupMsg) },
+                confirmButton = { TextButton(onClick = { showBackupMsg = false }) { Text("好", color = Brand) } }
+            )
+        }
 
         if (confirmStep > 0) {
             val name = when (wipeKind) {
