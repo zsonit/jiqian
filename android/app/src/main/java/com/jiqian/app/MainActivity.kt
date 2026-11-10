@@ -931,7 +931,7 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
         }
 
         Spacer(Modifier.height(14.dp))
-        Text("胎动记录 v5.11 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v5.12 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         if (confirmStep > 0) {
             val name = when (wipeKind) {

@@ -1459,6 +1459,17 @@ object SyncManager {
             // 命中就就地处理并返回，绝不推送（防止把本机数据盖回云端）
             if (remote != null) handleAdminAction(remote.state)?.let { return it }
             var merged = local
+            // v5.12 恢复保险：加入/创建配对后的第一轮同步（lastRev == 0），如果云端没有
+            // 本机的清空标记（cl 比本机的小），说明这次「清空全部记录」从未同步成功过——
+            // 只有本机自己知道。视为无效清空直接丢弃，否则它会把云端完整数据全部遮蔽，
+            // 误触清空后就再也恢复不回来了（代价：清空后一直离线又重配的设备需重新清一次）
+            if (remote != null && lastRev == 0L) {
+                val remoteCl = remote.state.optLong("cl", 0L)
+                if (remoteCl < local.optLong("cl", 0L)) {
+                    local.put("cl", remoteCl)
+                    AppLog.i("本机清空标记未同步过，按无效清空丢弃（云端 cl=$remoteCl）")
+                }
+            }
             // 这一轮真的从对方落到新数据了（只读端也能拉到，所以单独立标记）
             var appliedFromRemote = false
             // 云端还没有这一行（刚创建配对码）时必须推一次，否则对方永远拉不到数据
