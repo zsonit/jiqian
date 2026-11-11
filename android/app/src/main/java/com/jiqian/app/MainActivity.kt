@@ -12,7 +12,9 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -732,6 +734,22 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
     var showBackupMsg by remember { mutableStateOf(false) }
     var showRestoreBackupConfirm by remember { mutableStateOf(false) }
     var showRestoreCloudConfirm by remember { mutableStateOf(false) }
+    // v5.14 导出备份到本地文件夹：系统文件选择器，用户选目录、选文件名
+    val exportBackup = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            backupMsg = "导出中…"
+            showBackupMsg = true
+            kotlin.concurrent.thread {
+                val msg = BackupManager.exportTo(ctx, uri)
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    backupMsg = msg
+                    showBackupMsg = true
+                }
+            }
+        }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("设置", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
@@ -912,7 +930,8 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
                     Text("备份与恢复", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink)
                     Text(
                         if (lastBk > 0L)
-                            "上次备份：" + SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(lastBk)) + " · 每天自动 3 次，只留最新一份"
+                            "上次备份：" + SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(lastBk)) +
+                                " · " + BackupManager.fileSizeText(ctx) + " · 每天自动 3 次，只留最新一份"
                         else "还没有备份 · 每天自动备份 3 次（8 小时一次），只保留最新一份",
                         fontSize = 11.sp, color = Ink2, lineHeight = 15.sp, modifier = Modifier.padding(top = 2.dp)
                     )
@@ -934,6 +953,25 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
                             shape = RoundedCornerShape(50)
                         ) { Text("从云端恢复", color = Danger) }
                     }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = { exportBackup.launch(BackupManager.exportFileName()) },
+                            shape = RoundedCornerShape(50)
+                        ) { Text("导出到文件夹") }
+                        OutlinedButton(
+                            onClick = {
+                                backupMsg = BackupManager.shareBackup(ctx)
+                                showBackupMsg = true
+                            },
+                            shape = RoundedCornerShape(50)
+                        ) { Text("分享备份") }
+                    }
+                    Text(
+                        "「导出到文件夹」会打开系统文件界面，自己选存到哪（下载 / 文档 / U 盘都行），" +
+                            "之后用手机的文件管理器就能看到这个 json，也能拷到电脑。",
+                        fontSize = 10.5.sp, color = Ink2, lineHeight = 14.sp, modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
             }
         }
@@ -967,7 +1005,7 @@ fun SettingsScreen(onOpenSync: () -> Unit, onOpenLog: () -> Unit = {}) {
         }
 
         Spacer(Modifier.height(14.dp))
-        Text("胎动记录 v5.13 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
+        Text("胎动记录 v5.14 · 本地优先，无账号、无广告；配对同步采用端到端加密", fontSize = 12.sp, color = Ink2)
 
         // v5.13 备份/恢复的确认与结果弹窗（恢复走后台线程，网络请求不能在主线程）
         if (showRestoreBackupConfirm) {

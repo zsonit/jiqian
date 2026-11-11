@@ -2,4 +2,5 @@
 <!-- 运行日志导出：把 cacheDir/log-export/ 下的日志文件经 FileProvider 分享出去 -->
 <paths>
     <cache-path name="log_export" path="log-export/" />
+    <files-path name="backup" path="." />
 </paths>

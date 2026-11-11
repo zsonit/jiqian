@@ -249,7 +249,7 @@ struct SettingsView: View {
                         HStack {
                             Text("上次备份")
                             Spacer()
-                            Text(backupTimeText).foregroundStyle(Pal.ink2)
+                            Text("\(backupTimeText) · \(BackupManager.fileSizeText())").foregroundStyle(Pal.ink2)
                         }
                         Button {
                             backupMsg = BackupManager.backupNow()
@@ -259,6 +259,27 @@ struct SettingsView: View {
                                 Image(systemName: "square.and.arrow.down").foregroundStyle(Pal.brand)
                                 Text("立即备份")
                             }
+                        }
+                        if BackupManager.hasBackup {
+                            ShareLink(item: BackupManager.fileURL) {
+                                HStack {
+                                    Image(systemName: "square.and.arrow.up").foregroundStyle(Pal.brand)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("导出备份文件")
+                                        Text("存到「文件」、发微信或存到电脑")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(Pal.ink3)
+                                    }
+                                }
+                            }
+                        }
+                        HStack {
+                            Text("备份位置")
+                            Spacer()
+                            Text("「文件」App → 我的 iPhone → 胎动记录 → 备份")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Pal.ink2)
+                                .multilineTextAlignment(.trailing)
                         }
                         Button(role: .destructive) {
                             showRestoreBackupConfirm = true
@@ -279,7 +300,7 @@ struct SettingsView: View {
                     } header: {
                         Text("备份与恢复")
                     } footer: {
-                        Text("每天自动备份 3 次（8 小时一次），只保留最新一份。误清空/误删后可一键恢复：恢复会用备份或云端的数据整体重置本机记录，可写端还会把恢复的数据推回云端。")
+                        Text("每天自动备份 3 次（8 小时一次），只保留最新一份。备份文件可以直接用系统「文件」App 打开查看、拷到电脑或发给别人。误清空/误删后可一键恢复：恢复会用备份或云端的数据整体重置本机记录，可写端还会把恢复的数据推回云端。")
                     }
                 }
 
